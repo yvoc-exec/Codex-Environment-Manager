@@ -1,0 +1,52 @@
+<Window x:Class="CodexEnvironmentManager.Views.FirstRunWizard"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Welcome to Codex Environment Manager" Height="620" Width="620"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        Background="#0d1117" Foreground="#c9d1d9">
+    <Window.Resources>
+    </Window.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto"><Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <TextBlock Text="🔄 Codex Environment Manager" FontSize="20" FontWeight="Bold" Grid.Row="0" Margin="0,0,0,10"/>
+        <TextBlock Text="First-run setup detected." Foreground="#8b949e" Grid.Row="1" Margin="0,0,0,16"/>
+
+        <Border Background="#161b22" BorderBrush="#30363d" BorderThickness="1" CornerRadius="4" Padding="12" Grid.Row="2" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="Import existing Codex data" FontWeight="Bold" Margin="0,0,0,6"/>
+                <TextBlock Text="Your current %USERPROFILE%\.codex folder contains auth tokens and conversation history." TextWrapping="Wrap" Foreground="#8b949e" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="ImportButton" Content="Import as 'Default' Account" Click="ImportDefault_Click" Width="200"/>
+                    <Button x:Name="SkipButton" Content="Skip (start fresh)" Click="SkipImport_Click" Width="140"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Background="#161b22" BorderBrush="#30363d" BorderThickness="1" CornerRadius="4" Padding="12" Grid.Row="3" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="Codex Desktop path" FontWeight="Bold" Margin="0,0,0,6"/>
+                <TextBlock x:Name="DesktopPathText" Text="(auto-detecting...)" Foreground="#8b949e" TextTrimming="CharacterEllipsis" Margin="0,0,0,8"/>
+                <Button Content="Browse..." Click="BrowseDesktop_Click" Width="100" HorizontalAlignment="Left"/>
+            </StackPanel>
+        </Border>
+
+        <Border Background="#161b22" BorderBrush="#30363d" BorderThickness="1" CornerRadius="4" Padding="12" Grid.Row="4" Margin="0,0,0,12">
+            <StackPanel>
+                <TextBlock Text="Codex CLI" FontWeight="Bold" Margin="0,0,0,6"/>
+                <TextBlock x:Name="CliStatusText" Text="Checking..." Foreground="#8b949e" Margin="0,0,0,8"/>
+                <Button Content="How to install CLI" Click="InstallCliHelp_Click" Width="140" HorizontalAlignment="Left"/>
+            </StackPanel>
+        </Border>
+
+        <Button x:Name="FinishButton" Content="Finish Setup" Grid.Row="5" HorizontalAlignment="Right" Width="120" Click="Finish_Click" IsDefault="True"/>
+        <TextBlock x:Name="StatusText" Grid.Row="6" Text="" Foreground="#f85149" VerticalAlignment="Bottom"/>
+    </Grid></ScrollViewer>
+</Window>
