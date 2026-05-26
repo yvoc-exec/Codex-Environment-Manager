@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Management;
 using Microsoft.Win32;
 using CodexEnvironmentManager.Models;
 
@@ -50,6 +52,8 @@ public sealed class CodexDesktopDetection
 public class CodexProcessManager : IBestEffortDesktopTerminator
 {
     private readonly LogService _log;
+    private readonly object _desktopInspectionLogLock = new();
+    private readonly Dictionary<string, string> _desktopInspectionLogSignatures = new(StringComparer.Ordinal);
     public string? OverridePath { get; set; }
 
     public CodexProcessManager(LogService log) => _log = log;
@@ -59,21 +63,34 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
         if (session == null)
             return BestEffortDesktopSessionInspection.NoDesktop("No desktop session was supplied.");
 
-        var candidates = DesktopProcessTargetResolver.GetPlausibleCandidates(GetCodexProcessSnapshots());
+        var snapshots = GetCodexProcessSnapshots();
+        var candidates = DesktopProcessTargetResolver.GetPlausibleCandidates(snapshots);
+
+        BestEffortDesktopSessionInspection inspection;
         if (candidates.Count == 0)
-            return BestEffortDesktopSessionInspection.NoDesktop($"No live desktop instance was detected for session '{session.Id}'.");
+        {
+            inspection = BestEffortDesktopSessionInspection.NoDesktop($"No live desktop instance was detected for session '{session.Id}'.");
+        }
+        else if (candidates.Count == 1)
+        {
+            var target = candidates[0].Process;
+            inspection = BestEffortDesktopSessionInspection.Unique(
+                new DesktopProcessTarget(target.ProcessId, target.Name, target.CommandLine),
+                $"Resolved unique desktop target PID {target.ProcessId} for session '{session.Id}'.");
+        }
+        else
+        {
+            inspection = BestEffortDesktopSessionInspection.Ambiguous($"Multiple desktop candidates were detected for session '{session.Id}'.");
+        }
 
-        var target = DesktopProcessTargetResolver.Resolve(candidates.Select(x => x.Process));
-        if (target != null)
-            return BestEffortDesktopSessionInspection.Unique(target, $"Resolved unique desktop target PID {target.ProcessId} for session '{session.Id}'.");
-
-        return BestEffortDesktopSessionInspection.Ambiguous($"Multiple desktop candidates were detected for session '{session.Id}'.");
+        LogDesktopInspection(session.Id, snapshots.Count, candidates.Count, inspection);
+        return inspection;
     }
 
     public DesktopKillAttemptResult TryKillBestEffortDesktopSession(Session session)
     {
         var inspection = InspectBestEffortDesktopSession(session);
-        if (inspection.UniqueTarget == null)
+        if (inspection.State != SessionLiveState.Live || inspection.UniqueTarget == null)
             return DesktopKillAttemptResult.Inconclusive(inspection.Message);
 
         return TryKillDesktopProcess(inspection.UniqueTarget.ProcessId);
@@ -101,6 +118,30 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
         }
     }
 
+    private void LogDesktopInspection(string sessionId, int rawCodexLikeCount, int rootCandidateCount, BestEffortDesktopSessionInspection inspection)
+    {
+        var signature = $"{rawCodexLikeCount}|{rootCandidateCount}|{inspection.State}|{inspection.TargetProcessId?.ToString() ?? "none"}";
+
+        lock (_desktopInspectionLogLock)
+        {
+            if (_desktopInspectionLogSignatures.TryGetValue(sessionId, out var previousSignature) &&
+                string.Equals(previousSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _desktopInspectionLogSignatures[sessionId] = signature;
+        }
+
+        var targetSuffix = inspection.TargetProcessId.HasValue ? $", targetPid={inspection.TargetProcessId.Value}" : string.Empty;
+        var message = $"Desktop session '{sessionId}' inspection: codexLike={rawCodexLikeCount}, rootCandidates={rootCandidateCount}, state={inspection.State}{targetSuffix}";
+
+        if (inspection.State == SessionLiveState.Live)
+            _log.Info(message);
+        else
+            _log.Warn(message);
+    }
+
     private static bool WaitForProcessExit(int processId, int timeoutMs)
     {
         try
@@ -118,40 +159,19 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
     {
         try
         {
-            var psi = new ProcessStartInfo
+            var snapshots = new List<CodexProcessSnapshot>();
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name LIKE 'Codex%'");
+            using var results = searcher.Get();
+            foreach (ManagementObject item in results)
             {
-                FileName = "powershell.exe",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-NonInteractive");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-Command");
-            psi.ArgumentList.Add("$p = Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'Codex*' } | Select-Object ProcessId, Name, CommandLine; foreach ($item in $p) { Write-Output ($item.ProcessId.ToString() + '|' + $item.Name + '|' + ($item.CommandLine -replace '\\|','/')) }");
+                if (item["ProcessId"] == null || item["Name"] == null)
+                    continue;
 
-            using var proc = Process.Start(psi);
-            if (proc == null) return Array.Empty<CodexProcessSnapshot>();
-
-            if (!proc.WaitForExit(3000))
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                _log.Warn("Timed out while enumerating Codex processes for desktop kill.");
-                return Array.Empty<CodexProcessSnapshot>();
-            }
-
-            var snapshots = new System.Collections.Generic.List<CodexProcessSnapshot>();
-            foreach (var line in proc.StandardOutput.ReadToEnd().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Split('|', 3);
-                if (parts.Length < 2) continue;
-                if (!int.TryParse(parts[0], out var pid)) continue;
-                var name = parts[1];
-                var commandLine = parts.Length > 2 ? parts[2] : null;
-                snapshots.Add(new CodexProcessSnapshot(pid, name, commandLine));
+                var processId = Convert.ToInt32(item["ProcessId"]);
+                var name = Convert.ToString(item["Name"]) ?? string.Empty;
+                var commandLine = Convert.ToString(item["CommandLine"]);
+                snapshots.Add(new CodexProcessSnapshot(processId, name, commandLine));
             }
 
             return snapshots;
@@ -372,37 +392,24 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
         return TryFindCodexCliExecutable(out _);
     }
 
-    public ProcessStartInfo CreateCodexAppProcessStartInfo(string accountPath, string workingDirectory)
+    public IReadOnlyList<DesktopProcessTarget> GetLiveDesktopTargets()
+    {
+        var snapshots = GetCodexProcessSnapshots();
+        return DesktopProcessTargetResolver.GetPlausibleCandidates(snapshots)
+            .Select(x => new DesktopProcessTarget(x.Process.ProcessId, x.Process.Name, x.Process.CommandLine))
+            .ToList();
+    }
+
+    public ProcessStartInfo CreateCodexAppProcessStartInfo(string accountPath, string workingDirectory, string? profileName = null)
     {
         if (!TryFindCodexCliExecutable(out var codexPath) || string.IsNullOrWhiteSpace(codexPath))
             throw new FileNotFoundException("Codex Desktop executable was not found and Codex CLI is not available for `codex app` fallback.");
 
-        ProcessStartInfo psi;
-        if (codexPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || codexPath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
-        {
-            psi = new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                UseShellExecute = false,
-                WorkingDirectory = workingDirectory
-            };
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(BuildBatchCommand(codexPath, new[] { "app", workingDirectory }));
-        }
-        else
-        {
-            psi = new ProcessStartInfo
-            {
-                FileName = codexPath,
-                UseShellExecute = false,
-                WorkingDirectory = workingDirectory
-            };
-            psi.ArgumentList.Add("app");
-            psi.ArgumentList.Add(workingDirectory);
-        }
+        var args = string.IsNullOrWhiteSpace(profileName)
+            ? new[] { "app", workingDirectory }
+            : new[] { "app", "-c", $@"profile=""{profileName}""", workingDirectory };
 
-        psi.EnvironmentVariables["CODEX_HOME"] = accountPath;
-        return psi;
+        return CreateCodexCliProcessStartInfo(codexPath, accountPath, args);
     }
 
     public static string? FindWindowsTerminal()

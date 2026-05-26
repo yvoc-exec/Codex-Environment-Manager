@@ -78,10 +78,10 @@
                             </ListBox.ItemTemplate>
                         </ListBox>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Content="+ Plus" Click="AddPlusAccount_Click" ToolTip="Add OAuth/Plus account"/>
-                            <Button Content="+ API" Click="AddApiAccount_Click" ToolTip="Add API Key account"/>
+                            <Button Content="Add Account" Click="AddAccount_Click" ToolTip="Add a new account"/>
                             <Button Content="Edit" Click="EditAccount_Click" ToolTip="Rename selected account"/>
                             <Button Content="Delete" Click="DeleteAccount_Click" ToolTip="Delete selected account"/>
+                            <Button x:Name="KimiSetupButton" Content="Kimi Setup" Click="KimiSetup_Click" ToolTip="Open Kimi login/setup for the selected Kimi account" Visibility="Collapsed"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -162,7 +162,7 @@
                                             </StackPanel>
                                             <TextBlock Grid.Column="1" Text="{Binding StartTime, StringFormat='{}{0:HH:mm:ss}'}" Foreground="#8b949e" Margin="8,0" VerticalAlignment="Center"/>
                                             <Button Grid.Column="2" Content="Kill" Tag="{Binding Id}" Click="KillSession_Click" Margin="2"/>
-                                            <Button Grid.Column="3" Content="Snapshot" Tag="{Binding Id}" Click="SnapshotSession_Click" Margin="2" ToolTip="Export conversation snapshot"/>
+                                            <Button Grid.Column="3" Content="Snapshot" Tag="{Binding Id}" Click="SnapshotSession_Click" Margin="2" ToolTip="Export conversation snapshot" IsEnabled="{Binding CanSnapshot}"/>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -191,7 +191,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="4">
                             <TextBlock Text="Account" Foreground="#8b949e" Margin="0,0,0,2"/>
-                            <ComboBox x:Name="AccountCombo" Foreground="{StaticResource TextBrush}">
+                            <ComboBox x:Name="AccountCombo" Foreground="{StaticResource TextBrush}" SelectionChanged="AccountCombo_SelectionChanged">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Display}" Foreground="{StaticResource TextBrush}"/>
@@ -233,5 +233,3 @@
         </Grid>
     </Grid>
 </Window>
-
-

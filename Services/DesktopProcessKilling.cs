@@ -12,20 +12,24 @@ public sealed record DesktopProcessTarget(int ProcessId, string Name, string? Co
 
 public sealed class BestEffortDesktopSessionInspection
 {
+    public SessionLiveState State { get; init; } = SessionLiveState.Ambiguous;
     public bool HasLiveDesktop { get; init; }
     public bool IsAmbiguous { get; init; }
     public DesktopProcessTarget? UniqueTarget { get; init; }
+    public int? TargetProcessId => UniqueTarget?.ProcessId;
     public string Message { get; init; } = "";
 
     public static BestEffortDesktopSessionInspection NoDesktop(string message) =>
         new()
         {
+            State = SessionLiveState.ClearlyDead,
             Message = message
         };
 
     public static BestEffortDesktopSessionInspection Unique(DesktopProcessTarget target, string message) =>
         new()
         {
+            State = SessionLiveState.Live,
             HasLiveDesktop = true,
             UniqueTarget = target,
             Message = message
@@ -34,6 +38,7 @@ public sealed class BestEffortDesktopSessionInspection
     public static BestEffortDesktopSessionInspection Ambiguous(string message) =>
         new()
         {
+            State = SessionLiveState.Ambiguous,
             HasLiveDesktop = true,
             IsAmbiguous = true,
             Message = message
@@ -91,13 +96,9 @@ public static class DesktopProcessTargetResolver
     {
         var candidates = GetPlausibleCandidates(processes);
 
-        if (candidates.Count == 0) return null;
+        if (candidates.Count != 1) return null;
 
-        var bestScore = candidates.Max(x => x.Score);
-        var best = candidates.Where(x => x.Score == bestScore).ToList();
-        if (best.Count != 1) return null;
-
-        var match = best[0].Process;
+        var match = candidates[0].Process;
         return new DesktopProcessTarget(match.ProcessId, match.Name, match.CommandLine);
     }
 
@@ -109,6 +110,8 @@ public static class DesktopProcessTargetResolver
             .Where(IsCodexProcess)
             .Select(p => (Process: p, Score: ScoreCandidate(p.CommandLine)))
             .Where(x => x.Score > 0)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Process.ProcessId)
             .ToList();
     }
 
@@ -128,15 +131,29 @@ public static class DesktopProcessTargetResolver
     private static int ScoreCandidate(string? commandLine)
     {
         if (string.IsNullOrWhiteSpace(commandLine))
-            return 2;
-
-        var normalized = commandLine.ToLowerInvariant();
-        if (normalized.Contains("--cd") || normalized.Contains("--profile"))
             return 0;
 
-        if (normalized.Contains(" app "))
-            return 1;
+        var normalized = commandLine.ToLowerInvariant();
+        if (IsExcludedDesktopCommandLine(normalized))
+            return 0;
 
-        return 2;
+        var score = 1;
+        if (normalized.Contains("codex://"))
+            score += 2;
+
+        if (normalized.Contains(@"\app\codex.exe") || normalized.Contains("/app/codex.exe"))
+            score += 1;
+
+        return score;
+    }
+
+    private static bool IsExcludedDesktopCommandLine(string normalizedCommandLine)
+    {
+        return normalizedCommandLine.Contains("--type=") ||
+               normalizedCommandLine.Contains("app-server") ||
+               normalizedCommandLine.Contains("resources\\codex.exe") ||
+               normalizedCommandLine.Contains("resources/codex.exe") ||
+               normalizedCommandLine.Contains("--cd") ||
+               normalizedCommandLine.Contains("--profile");
     }
 }

@@ -25,6 +25,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SessionManager _sessionManager;
     private readonly LauncherService _launcher;
     private readonly CodexProcessManager _processManager;
+    private readonly KimiCliManager _kimiCliManager;
     private readonly DesktopWorkspaceLauncher _desktopWorkspaceLauncher;
     private readonly GitStateGuard _gitGuard;
     private readonly TrayService _tray;
@@ -51,9 +52,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _workspaceManager = new WorkspaceManager(_config);
         _processManager = new CodexProcessManager(_log);
         _sessionManager = new SessionManager(_config, _processManager);
+        _kimiCliManager = new KimiCliManager(_config, _log);
         _desktopWorkspaceLauncher = new DesktopWorkspaceLauncher(_processManager, _log);
         _gitGuard = new GitStateGuard();
-        _launcher = new LauncherService(_accountManager, _personaEngine, _sessionManager, _processManager, _desktopWorkspaceLauncher, _gitGuard, _log, _config);
+        _launcher = new LauncherService(_accountManager, _personaEngine, _sessionManager, _processManager, _desktopWorkspaceLauncher, _gitGuard, _kimiCliManager, _log, _config);
         _tray = new TrayService(this);
 
         ApplyCodexDesktopOverride();
@@ -116,6 +118,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             AccountList.ItemsSource = Accounts;
             AccountCombo.ItemsSource = Accounts;
             RefreshActiveAccount();
+            UpdateAccountActionAvailability();
 
             Personas.Clear();
             foreach (var p in _config.LoadList<Persona>("personas")) Personas.Add(p);
@@ -183,34 +186,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             s.PersonaName = Personas.FirstOrDefault(p => p.Id == s.PersonaId)?.Name ?? "?";
             s.WorkspaceName = Workspaces.FirstOrDefault(w => w.Id == s.WorkspaceId)?.Name ?? "?";
             var vm = new SessionViewModel(s);
-            var hasExitMarker = !string.IsNullOrWhiteSpace(s.ExitMarkerPath) && File.Exists(s.ExitMarkerPath);
-            if (string.Equals(s.Type, "desktop_store", StringComparison.OrdinalIgnoreCase) && !hasExitMarker)
+            var inspection = _sessionManager.InspectSession(s);
+            if (inspection.State == SessionLiveState.Ambiguous && !string.IsNullOrWhiteSpace(inspection.Message))
             {
-                vm.StatusText = "(desktop)";
+                vm.StatusText = inspection.Message;
             }
-            else if (hasExitMarker)
+            else if (inspection.State == SessionLiveState.ClearlyDead)
             {
                 vm.StatusText = "(exited)";
-            }
-            else if (s.ProcessId.HasValue)
-            {
-                try
-                {
-                    var p = System.Diagnostics.Process.GetProcessById(s.ProcessId.Value);
-                    vm.StatusText = p.HasExited ? "(exited)" : "";
-                }
-                catch
-                {
-                    vm.StatusText = "(exited)";
-                }
             }
             else
             {
                 vm.StatusText = s.Type switch
                 {
                     "cli" => "(cli)",
-                    "desktop_store" => "(desktop)",
-                    _ => "(desktop)"
+                    "kimi-cli" => "(kimi)",
+                    "desktop_store" => string.IsNullOrWhiteSpace(s.ProfileVerificationStatus) ? "(desktop, profile unverified)" : $"(desktop, {s.ProfileVerificationStatus})",
+                    _ => string.IsNullOrWhiteSpace(s.ProfileVerificationStatus) ? "(desktop, profile unverified)" : $"(desktop, {s.ProfileVerificationStatus})"
                 };
             }
             ActiveSessions.Add(vm);
@@ -224,10 +216,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _healthTimer.Tick += (s, e) =>
         {
             RefreshActiveAccount();
-            // Remove sessions only when their tracked process or exit marker proves they are done.
-            var dead = _sessionManager.Active.Where(SessionManager.ShouldPruneSession).ToList();
-            foreach (var d in dead) _sessionManager.Remove(d.Id);
-            if (dead.Count > 0) RefreshSessions();
+            RefreshSessions();
         };
         _healthTimer.Start();
     }
@@ -236,7 +225,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void AccountList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (AccountList.SelectedItem is Account a) AccountCombo.SelectedItem = a;
+        UpdateAccountActionAvailability();
     }
+
+    private void AccountCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (AccountCombo.SelectedItem is Account a) AccountList.SelectedItem = a;
+        UpdateAccountActionAvailability();
+    }
+
     private void PersonaList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (PersonaList.SelectedItem is Persona p) PersonaCombo.SelectedItem = p;
@@ -255,45 +252,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var lastPers = Personas.FirstOrDefault(p => p.Id == ws.LastPersonaId);
             if (lastPers != null) PersonaCombo.SelectedItem = lastPers;
         }
+        UpdateAccountActionAvailability();
     }
+
+    private void UpdateAccountActionAvailability()
+    {
+        var account = GetSelectedAccountContext();
+        var isKimi = account != null && ProviderCapabilities.IsKimiProvider(account.ResolvedProvider);
+        KimiSetupButton.Visibility = isKimi ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private Account? GetSelectedAccountContext() =>
+        AccountCombo.SelectedItem as Account ?? AccountList.SelectedItem as Account;
 
     // --- Account CRUD ---
-    private void AddPlusAccount_Click(object sender, RoutedEventArgs e)
+    private void AddAccount_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new InputDialog("Enter account name:", "Personal");
-        dlg.Owner = this;
-        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.ResponseText))
+        var wizard = new AccountWizardWindow(_accountManager) { Owner = this };
+        if (wizard.ShowDialog() == true)
         {
-            try
-            {
-                _accountManager.AddPlusAccount(dlg.ResponseText.Trim());
-                LoadData();
-            }
-            catch (Exception ex)
-            {
-                WpfMessageBox.Show(ex.Message, "Account", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-        }
-    }
-
-    private void AddApiAccount_Click(object sender, RoutedEventArgs e)
-    {
-        var nameDlg = new InputDialog("Enter account name:", "Dev API");
-        nameDlg.Owner = this;
-        if (nameDlg.ShowDialog() != true) return;
-        var keyDlg = new InputDialog("Enter OpenAI API Key:", "", isSecret: true);
-        keyDlg.Owner = this;
-        if (keyDlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(keyDlg.ResponseText))
-        {
-            try
-            {
-                _accountManager.AddApiKeyAccount(nameDlg.ResponseText.Trim(), keyDlg.ResponseText.Trim());
-                LoadData();
-            }
-            catch (Exception ex)
-            {
-                WpfMessageBox.Show(ex.Message, "Account", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
+            LoadData();
         }
     }
 
@@ -318,6 +296,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 _config.SaveList("accounts", list);
                 LoadData();
             }
+        }
+    }
+
+    private void KimiSetup_Click(object sender, RoutedEventArgs e)
+    {
+        var acct = GetSelectedAccountContext();
+        if (acct is null)
+        {
+            WpfMessageBox.Show("Select a Kimi account first.", "Kimi Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!ProviderCapabilities.IsKimiProvider(acct.ResolvedProvider))
+        {
+            WpfMessageBox.Show("Kimi setup is only available for Kimi accounts.", "Kimi Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            StatusText.Text = $"Launching Kimi setup for {acct.Name}...";
+            _kimiCliManager.RunLogin(acct);
+            StatusText.Text = $"Kimi setup opened for {acct.Name}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Error: {ex.Message}";
+            _log.Error("Kimi setup failed", ex);
+            WpfMessageBox.Show($"Kimi setup failed:\n{ex.Message}", "Kimi Setup", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -371,7 +378,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var editor = new PersonaEditorWindow(new Persona
         {
             Name = "Custom",
-            Icon = "👤",
+            Icon = "\U0001F464",
             AgentsTemplatePath = "Templates/personas/custom_profile.md",
             ApprovalsReviewer = "user",
             ConfigOverrides = new()
@@ -549,9 +556,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private bool ConfirmKimiLaunch(Account acct, Persona? persona, Workspace ws)
+    {
+        try
+        {
+            var preview = _launcher.BuildKimiLaunchPreview(acct, persona, ws);
+            return WpfMessageBox.Show(
+                preview + Environment.NewLine + "Proceed with this launch?",
+                "Verify Kimi Launch Contract",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information) == MessageBoxResult.Yes;
+        }
+        catch (Exception ex)
+        {
+            WpfMessageBox.Show($"Kimi launch validation failed:\n{ex.Message}", "Launch Validation", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+
 
     private void ViewGeneratedFiles_Click(object sender, RoutedEventArgs e)
     {
+        if (PersonaCombo.SelectedItem is Persona selectedPersona && selectedPersona.IsKimiProvider)
+        {
+            WpfMessageBox.Show("Kimi profiles do not generate Codex account files.", "View Generated Files", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         if (AccountCombo.SelectedItem is not Account acct || PersonaCombo.SelectedItem is not Persona persona)
         {
             WpfMessageBox.Show("Select an account and profile first.", "View Generated Files", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -591,6 +622,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             WpfMessageBox.Show("Select an account, profile, and workspace.");
             return;
         }
+        if (!ProviderCapabilities.ForProvider(acct.ResolvedProvider).SupportsDesktop)
+        {
+            StatusText.Text = "Desktop App not available for Kimi";
+            WpfMessageBox.Show("Desktop App not available for Kimi", "Desktop Launch", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         if (!ConfirmLaunch(acct, persona, ws, "desktop")) return;
         try
         {
@@ -619,23 +656,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             WpfMessageBox.Show("Select an account, profile, and workspace.");
             return;
         }
-        if (!ConfirmLaunch(acct, persona, ws, "cli")) return;
+        var accountCapabilities = ProviderCapabilities.ForProvider(acct.ResolvedProvider);
+        var isKimi = ProviderCapabilities.IsKimiProvider(acct.ResolvedProvider);
+        if (!accountCapabilities.SupportsCli)
+        {
+            WpfMessageBox.Show($"{acct.ResolvedProvider} does not support CLI launches.", "Launch", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (isKimi)
+        {
+            if (!ConfirmKimiLaunch(acct, persona, ws)) return;
+        }
+        else if (!ConfirmLaunch(acct, persona, ws, "cli"))
+        {
+            return;
+        }
+
         try
         {
-            StatusText.Text = "Launching CLI Companion...";
-            _launcher.LaunchCliCompanion(acct, persona, ws);
+            StatusText.Text = isKimi ? "Launching Kimi CLI..." : "Launching CLI Companion...";
+            if (isKimi)
+                _launcher.LaunchKimiCompanion(acct, persona, ws);
+            else
+                _launcher.LaunchCliCompanion(acct, persona, ws);
             _workspaceManager.UpdateLastSession(ws.Id, acct.Id, persona.Id);
             var wlist = _workspaceManager.GetWorkspaces();
             var w = wlist.FirstOrDefault(x => x.Id == ws.Id);
             if (w != null) { w.LastLaunchType = "cli"; _config.SaveList("workspaces", wlist); }
             RefreshSessions();
             Dispatcher.BeginInvoke(new Action(RefreshSessions), DispatcherPriority.Background);
-            StatusText.Text = "CLI Companion launched.";
+            StatusText.Text = isKimi ? "Kimi CLI launched." : "CLI Companion launched.";
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Error: {ex.Message}";
-            _log.Error("CLI launch failed", ex);
+            _log.Error(isKimi ? "Kimi launch failed" : "CLI launch failed", ex);
             WpfMessageBox.Show($"Launch failed:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -661,6 +716,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         AccountCombo.SelectedItem = acct;
         PersonaCombo.SelectedItem = persona;
+        if (string.Equals(acct.ResolvedProvider, "kimi", StringComparison.OrdinalIgnoreCase) && ws.LastLaunchType != "cli")
+        {
+            // Kimi has no desktop launch; force CLI resume.
+            LaunchCli_Click(sender, e);
+            return;
+        }
         if (ws.LastLaunchType == "cli")
             LaunchCli_Click(sender, e);
         else
@@ -687,6 +748,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             var s = _sessionManager.Active.FirstOrDefault(x => x.Id == sessionId);
             if (s == null) return;
+            if (string.Equals(s.Type, "kimi-cli", StringComparison.OrdinalIgnoreCase))
+            {
+                WpfMessageBox.Show("Snapshots are not available for Kimi sessions.", "Snapshot", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
             var accountPath = JunctionManager.GetAccountProfilePath(s.AccountId);
             var orbitPath = Path.Combine(accountPath, "orbit.db");
             if (File.Exists(orbitPath))
@@ -773,8 +839,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            var accounts = _accountManager.GetAccounts();
-            var personas = _config.LoadList<Persona>("personas");
+            var accounts = _accountManager.GetAccounts()
+                .Where(a => string.Equals(a.ResolvedProvider, "codex", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var personas = _config.LoadList<Persona>("personas")
+                .Where(p => !p.IsKimiProvider)
+                .ToList();
             var updated = 0;
 
             foreach (var account in accounts)
@@ -851,15 +921,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
-        var sw = new SettingsWindow(_config, _log);
+        var sw = new SettingsWindow(_config, _log, _kimiCliManager);
         sw.Owner = this;
-            if (sw.ShowDialog() == true)
-            {
-                var settings = _config.LoadList<AppSettings>("settings").FirstOrDefault();
-                _processManager.OverridePath = CodexProcessManager.NormalizeDesktopOverridePath(settings?.CodexDesktopPath);
-            }
+        if (sw.ShowDialog() == true)
+        {
+            var settings = _config.LoadList<AppSettings>("settings").FirstOrDefault();
+            _processManager.OverridePath = CodexProcessManager.NormalizeDesktopOverridePath(settings?.CodexDesktopPath);
         }
-
+    }
 
     private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
     {
@@ -932,7 +1001,18 @@ public class SessionViewModel
     public SessionViewModel(Session s) => _session = s;
     public string Id => _session.Id;
     public string DisplayName => _session.DisplayName;
-    public string TypeIcon => _session.Type.StartsWith("desktop", StringComparison.OrdinalIgnoreCase) ? "Desktop" : "CLI";
+    public string RequestedProfileName => _session.RequestedProfileName;
+    public string RequestedCodexProfileName => _session.RequestedCodexProfileName;
+    public string ProfileLaunchMethod => _session.ProfileLaunchMethod;
+    public string ProfileVerificationStatus => _session.ProfileVerificationStatus;
+    public string ProfileLaunchCommandPreview => _session.ProfileLaunchCommandPreview;
+    public string TypeIcon => _session.Type switch
+    {
+        "kimi-cli" => "Kimi",
+        _ when _session.Type.StartsWith("desktop", StringComparison.OrdinalIgnoreCase) => "Desktop",
+        _ => "CLI"
+    };
     public DateTime StartTime => _session.StartTime;
     public string StatusText { get; set; } = "";
+    public bool CanSnapshot => !string.Equals(_session.Type, "kimi-cli", StringComparison.OrdinalIgnoreCase);
 }

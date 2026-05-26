@@ -6,7 +6,9 @@ using System.Windows;
 using System.Windows.Controls;
 using WpfComboBox = System.Windows.Controls.ComboBox;
 using WpfComboBoxItem = System.Windows.Controls.ComboBoxItem;
+using WinOpenFileDialog = Microsoft.Win32.OpenFileDialog;
 using CodexEnvironmentManager.Models;
+using CodexEnvironmentManager.Services;
 using WpfMessageBox = System.Windows.MessageBox;
 
 namespace CodexEnvironmentManager.Views;
@@ -35,11 +37,17 @@ public partial class PersonaEditorWindow : Window
     private readonly string _templatesDir;
     private readonly List<string> _cliArgs = new();
     private readonly Dictionary<string, string> _envVars = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _kimiSkillsDirs = new();
+    private readonly List<string> _kimiAdditionalDirs = new();
+    private KimiPersonaMigrationResult _kimiMigrationResult = new();
     private string _selectedTemplatePath = string.Empty;
+    private string _kimiThinkingMode = "default";
+    private bool _kimiPlanMode;
+    private string _kimiMcpConfigFile = string.Empty;
 
     private static readonly Choice[] IconChoices =
     {
-        new("👤", "👤 Default", "Generic profile icon."),
+        new("\U0001F464", "\U0001F464 Default", "Generic profile icon."),
         new("🧠", "🧠 Planner", "Good fit for planning and review oriented profiles."),
         new("🔎", "🔎 Reviewer", "Good fit for review and audit oriented profiles."),
         new("🛠️", "🛠️ Implementor", "Good fit for implementation oriented profiles."),
@@ -53,6 +61,14 @@ public partial class PersonaEditorWindow : Window
         new("gpt-5.4", "gpt-5.4", "Balanced coding model."),
         new("gpt-5.4-mini", "gpt-5.4-mini", "Lower-cost, faster model for lighter execution tasks."),
         new("gpt-5.5", "gpt-5.5", "Strongest reasoning model currently used in this workflow."),
+    };
+
+    private static readonly Choice[] KimiModelChoices =
+    {
+        new("kimi-k2.6", "kimi-k2.6", "Kimi's latest general-purpose model with thinking and non-thinking modes."),
+        new("kimi-k2.5", "kimi-k2.5", "Kimi's previous multimodal model with thinking and non-thinking modes."),
+        new("kimi-k2-thinking", "kimi-k2-thinking", "Dedicated thinking model with thinking forcibly enabled."),
+        new("kimi-k2-turbo-preview", "kimi-k2-turbo-preview", "High-speed Kimi K2 preview model."),
     };
 
     private static readonly Choice[] ReasoningChoices =
@@ -99,6 +115,13 @@ public partial class PersonaEditorWindow : Window
         new("CODEX_MODE=implement", "CODEX_MODE=implement", "Marks the profile as implementation oriented."),
     };
 
+    private static readonly Choice[] KimiThinkingModeChoices =
+    {
+        new("default", "default", "Use Kimi's default thinking behavior."),
+        new("thinking", "thinking", "Force thinking mode on."),
+        new("no-thinking", "no-thinking", "Force thinking mode off."),
+    };
+
     public PersonaEditorWindow(Persona persona)
     {
         InitializeComponent();
@@ -121,9 +144,17 @@ public partial class PersonaEditorWindow : Window
     {
         Id = string.IsNullOrWhiteSpace(p.Id) ? Guid.NewGuid().ToString("N") : p.Id,
         Name = p.Name,
-        Icon = string.IsNullOrWhiteSpace(p.Icon) ? "👤" : p.Icon,
+        Icon = string.IsNullOrWhiteSpace(p.Icon) ? "\U0001F464" : p.Icon,
         AgentsTemplatePath = p.AgentsTemplatePath,
         ApprovalsReviewer = string.IsNullOrWhiteSpace(p.ApprovalsReviewer) ? "user" : p.ApprovalsReviewer,
+        KimiOptions = new KimiProfileOptions
+        {
+            ThinkingMode = string.IsNullOrWhiteSpace(p.KimiOptions?.ThinkingMode) ? "default" : p.KimiOptions.ThinkingMode,
+            PlanMode = p.KimiOptions?.PlanMode ?? false,
+            SkillsDirs = p.KimiOptions?.SkillsDirs?.ToList() ?? new List<string>(),
+            McpConfigFile = p.KimiOptions?.McpConfigFile ?? string.Empty,
+            AdditionalDirs = p.KimiOptions?.AdditionalDirs?.ToList() ?? new List<string>()
+        },
         ConfigOverrides = new Dictionary<string, string>(p.ConfigOverrides, StringComparer.OrdinalIgnoreCase),
         EnvVars = new Dictionary<string, string>(p.EnvVars, StringComparer.OrdinalIgnoreCase),
         CliArgs = p.CliArgs.ToList()
@@ -132,7 +163,8 @@ public partial class PersonaEditorWindow : Window
     private void InitializeChoices()
     {
         BindChoices(IconBox, IconChoices, allowCurrentValue: true, currentValue: Persona.Icon);
-        BindChoices(ModelBox, ModelChoices, allowCurrentValue: true, currentValue: GetConfig("model", "gpt-5.4"));
+        BindChoices(ModelBox, BuildModelChoices(), allowCurrentValue: true, currentValue: GetConfig("model", "gpt-5.4"));
+        BindChoices(ThinkingModeBox, KimiThinkingModeChoices, allowCurrentValue: true, currentValue: _kimiThinkingMode);
         BindChoices(ReasoningBox, ReasoningChoices, allowCurrentValue: true, currentValue: GetConfig("model_reasoning_effort", "high"));
         BindChoices(SandboxBox, SandboxChoices, allowCurrentValue: true, currentValue: GetConfig("sandbox_mode", "read-only"));
         BindChoices(ApprovalBox, ApprovalChoices, allowCurrentValue: true, currentValue: GetConfig("approval_policy", "on-request"));
@@ -143,6 +175,7 @@ public partial class PersonaEditorWindow : Window
 
         IconBox.SelectionChanged += ComboWithChoice_SelectionChanged;
         ModelBox.SelectionChanged += ComboWithChoice_SelectionChanged;
+        ThinkingModeBox.SelectionChanged += ComboWithChoice_SelectionChanged;
         ReasoningBox.SelectionChanged += ComboWithChoice_SelectionChanged;
         SandboxBox.SelectionChanged += ComboWithChoice_SelectionChanged;
         ApprovalBox.SelectionChanged += ComboWithChoice_SelectionChanged;
@@ -155,7 +188,7 @@ public partial class PersonaEditorWindow : Window
     private void LoadPersona()
     {
         NameBox.Text = Persona.Name;
-        SelectChoice(IconBox, Persona.Icon, "👤");
+        SelectChoice(IconBox, Persona.Icon, "\U0001F464");
         SelectChoice(ModelBox, GetConfig("model", "gpt-5.4"), "gpt-5.4");
         SelectChoice(ReasoningBox, GetConfig("model_reasoning_effort", "high"), "high");
         SelectChoice(SandboxBox, GetConfig("sandbox_mode", "read-only"), "read-only");
@@ -164,14 +197,37 @@ public partial class PersonaEditorWindow : Window
         _selectedTemplatePath = string.IsNullOrWhiteSpace(Persona.AgentsTemplatePath) ? "Templates/personas/custom_profile.md" : Persona.AgentsTemplatePath;
         RefreshTemplateChoices(_selectedTemplatePath);
 
+        var isKimi = Persona.IsKimiProvider;
+        _kimiMigrationResult = isKimi ? KimiPersonaMigration.Normalize(Persona) : new KimiPersonaMigrationResult();
+        var kimiOptions = Persona.KimiOptions ?? new KimiProfileOptions();
+        _kimiThinkingMode = NormalizeThinkingMode(kimiOptions.ThinkingMode);
+        _kimiPlanMode = kimiOptions.PlanMode;
+        _kimiMcpConfigFile = kimiOptions.McpConfigFile?.Trim() ?? string.Empty;
+        _kimiSkillsDirs.Clear();
+        _kimiSkillsDirs.AddRange((kimiOptions.SkillsDirs ?? new List<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()));
+        _kimiAdditionalDirs.Clear();
+        _kimiAdditionalDirs.AddRange((kimiOptions.AdditionalDirs ?? new List<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()));
+
+        SelectChoice(ThinkingModeBox, _kimiThinkingMode, "default");
+        PlanModeCheckBox.IsChecked = _kimiPlanMode;
+        RefreshKimiSkillsDirsList();
+        RefreshKimiAdditionalDirsList();
+        KimiMcpConfigBox.Text = _kimiMcpConfigFile;
+
         _cliArgs.Clear();
-        _cliArgs.AddRange(Persona.CliArgs.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()));
+        if (!isKimi)
+            _cliArgs.AddRange(Persona.CliArgs.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()));
         RefreshCliArgsList();
 
         _envVars.Clear();
-        foreach (var kv in Persona.EnvVars.Where(kv => !string.IsNullOrWhiteSpace(kv.Key)))
-            _envVars[kv.Key.Trim()] = kv.Value ?? string.Empty;
+        if (!isKimi)
+        {
+            foreach (var kv in Persona.EnvVars.Where(kv => !string.IsNullOrWhiteSpace(kv.Key)))
+                _envVars[kv.Key.Trim()] = kv.Value ?? string.Empty;
+        }
         RefreshEnvVarsList();
+        UpdateKimiMigrationWarning(isKimi);
+        UpdateProviderAwareUi();
     }
 
     private string GetConfig(string key, string fallback)
@@ -228,9 +284,18 @@ public partial class PersonaEditorWindow : Window
         return items;
     }
 
+    private List<Choice> BuildModelChoices()
+    {
+        return ModelChoices.Concat(KimiModelChoices).ToList();
+    }
+
     private List<Choice> BuildCliArgChoices()
     {
+        var isKimi = Persona.IsKimiModel(ChoiceValue(ModelBox, GetConfig("model", "gpt-5.4")));
         var items = CliArgChoices.ToList();
+        if (isKimi)
+            return new List<Choice>();
+
         foreach (var arg in _cliArgs)
         {
             if (items.Any(x => string.Equals(x.Value, arg, StringComparison.OrdinalIgnoreCase))) continue;
@@ -241,6 +306,9 @@ public partial class PersonaEditorWindow : Window
 
     private List<Choice> BuildEnvVarChoices()
     {
+        if (Persona.IsKimiModel(ChoiceValue(ModelBox, GetConfig("model", "gpt-5.4"))))
+            return new List<Choice>();
+
         var items = EnvVarChoices.ToList();
         foreach (var kv in _envVars)
         {
@@ -305,6 +373,18 @@ public partial class PersonaEditorWindow : Window
         BindChoices(EnvVarPresetBox, BuildEnvVarChoices(), allowCurrentValue: false, currentValue: null);
     }
 
+    private void RefreshKimiSkillsDirsList()
+    {
+        KimiSkillsDirsList.ItemsSource = null;
+        KimiSkillsDirsList.ItemsSource = _kimiSkillsDirs.ToList();
+    }
+
+    private void RefreshKimiAdditionalDirsList()
+    {
+        KimiAdditionalDirsList.ItemsSource = null;
+        KimiAdditionalDirsList.ItemsSource = _kimiAdditionalDirs.ToList();
+    }
+
     private static KeyValuePair<string, string>? ParseEnvVarPair(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
@@ -316,6 +396,67 @@ public partial class PersonaEditorWindow : Window
         return new KeyValuePair<string, string>(key, val);
     }
 
+    private static string NormalizeThinkingMode(string? value)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? "default" : value.Trim().ToLowerInvariant();
+        return normalized is "default" or "thinking" or "no-thinking" ? normalized : "default";
+    }
+
+    private bool IsKimiProviderSelected() =>
+        Persona.IsKimiModel(ChoiceValue(ModelBox, GetConfig("model", "gpt-5.4")));
+
+    private void UpdateProviderAwareUi()
+    {
+        var isKimi = IsKimiProviderSelected();
+        var capabilities = ProviderCapabilities.ForModel(ChoiceValue(ModelBox, GetConfig("model", "gpt-5.4")));
+
+        ReasoningBox.IsEnabled = !isKimi;
+        SandboxBox.IsEnabled = !isKimi;
+        ApprovalBox.IsEnabled = !isKimi;
+        ApprovalsReviewerBox.IsEnabled = !isKimi;
+        EnvVarsBorder.Visibility = isKimi ? Visibility.Collapsed : Visibility.Visible;
+        EnvVarPresetBox.IsEnabled = !isKimi;
+        AddEnvVarButton.IsEnabled = !isKimi;
+        RemoveEnvVarButton.IsEnabled = !isKimi;
+        EnvVarsList.IsEnabled = !isKimi;
+        InstructionsRefreshButton.IsEnabled = !isKimi;
+        CliArgsBorder.Visibility = isKimi ? Visibility.Collapsed : Visibility.Visible;
+        CliArgPresetBox.IsEnabled = !isKimi;
+        AddCliArgButton.IsEnabled = !isKimi;
+        RemoveCliArgButton.IsEnabled = !isKimi;
+        CliArgsList.IsEnabled = !isKimi;
+        KimiOptionsBorder.Visibility = isKimi ? Visibility.Visible : Visibility.Collapsed;
+        ThinkingModeBox.IsEnabled = capabilities.SupportsThinkingMode && isKimi;
+        PlanModeCheckBox.IsEnabled = capabilities.SupportsPlanMode && isKimi;
+        KimiSkillsDirsList.IsEnabled = capabilities.SupportsSkillsDir && isKimi;
+        AddKimiSkillsDirButton.IsEnabled = capabilities.SupportsSkillsDir && isKimi;
+        RemoveKimiSkillsDirButton.IsEnabled = capabilities.SupportsSkillsDir && isKimi;
+        KimiMcpConfigBox.IsEnabled = capabilities.SupportsMcpConfig && isKimi;
+        BrowseKimiMcpConfigButton.IsEnabled = capabilities.SupportsMcpConfig && isKimi;
+        KimiAdditionalDirsList.IsEnabled = capabilities.SupportsAdditionalWorkspaceDirs && isKimi;
+        AddKimiAdditionalDirButton.IsEnabled = capabilities.SupportsAdditionalWorkspaceDirs && isKimi;
+        RemoveKimiAdditionalDirButton.IsEnabled = capabilities.SupportsAdditionalWorkspaceDirs && isKimi;
+        UpdateKimiMigrationWarning(isKimi);
+
+        ReasoningBox.ToolTip = isKimi
+            ? "Kimi does not use Codex-style reasoning effort settings here."
+            : "How much reasoning the model should spend before answering or acting.";
+        SandboxBox.ToolTip = isKimi
+            ? "Kimi does not use Codex sandbox settings here."
+            : "Choose how much file access Codex gets inside and outside the workspace.";
+        ApprovalBox.ToolTip = isKimi
+            ? "Kimi does not use Codex approval policy settings here."
+            : "How often Codex should ask before risky actions.";
+        ApprovalsReviewerBox.ToolTip = isKimi
+            ? "Kimi does not use Codex approvals reviewer settings here."
+            : "Choose who reviews approval requests for this profile.";
+
+        RefreshCliArgsList();
+        RefreshEnvVarsList();
+        RefreshKimiSkillsDirsList();
+        RefreshKimiAdditionalDirsList();
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(NameBox.Text))
@@ -324,20 +465,57 @@ public partial class PersonaEditorWindow : Window
             return;
         }
 
+        var isKimi = Persona.IsKimiModel(ChoiceValue(ModelBox, "gpt-5.4"));
         Persona.Name = NameBox.Text.Trim();
-        Persona.Icon = ChoiceValue(IconBox, "👤");
+        Persona.Icon = ChoiceValue(IconBox, "\U0001F464");
         Persona.AgentsTemplatePath = ChoiceValue(TemplateBox, string.IsNullOrWhiteSpace(_selectedTemplatePath) ? "Templates/personas/custom_profile.md" : _selectedTemplatePath);
-        Persona.ApprovalsReviewer = ChoiceValue(ApprovalsReviewerBox, "user");
         Persona.ConfigOverrides["model"] = ChoiceValue(ModelBox, "gpt-5.4");
-        Persona.ConfigOverrides["model_reasoning_effort"] = ChoiceValue(ReasoningBox, "high");
-        Persona.ConfigOverrides["sandbox_mode"] = ChoiceValue(SandboxBox, "read-only");
-        Persona.ConfigOverrides["approval_policy"] = ChoiceValue(ApprovalBox, "on-request");
+        Persona.ConfigOverrides.Remove("model_reasoning_effort");
+        Persona.ConfigOverrides.Remove("sandbox_mode");
+        Persona.ConfigOverrides.Remove("approval_policy");
         Persona.ConfigOverrides.Remove("approvals_reviewer");
         Persona.ConfigOverrides.Remove("reasoning_effort");
         Persona.ConfigOverrides.Remove("sandbox");
         Persona.ConfigOverrides.Remove("approval");
-        Persona.CliArgs = _cliArgs.ToList();
-        Persona.EnvVars = new Dictionary<string, string>(_envVars, StringComparer.OrdinalIgnoreCase);
+
+        if (!isKimi)
+        {
+            Persona.ApprovalsReviewer = ChoiceValue(ApprovalsReviewerBox, "user");
+            Persona.ConfigOverrides["model_reasoning_effort"] = ChoiceValue(ReasoningBox, "high");
+            Persona.ConfigOverrides["sandbox_mode"] = ChoiceValue(SandboxBox, "read-only");
+            Persona.ConfigOverrides["approval_policy"] = ChoiceValue(ApprovalBox, "on-request");
+            Persona.CliArgs = _cliArgs.ToList();
+            Persona.EnvVars = new Dictionary<string, string>(_envVars, StringComparer.OrdinalIgnoreCase);
+            Persona.KimiOptions = new KimiProfileOptions
+            {
+                ThinkingMode = "default",
+                PlanMode = false,
+                SkillsDirs = new List<string>(),
+                McpConfigFile = string.Empty,
+                AdditionalDirs = new List<string>()
+            };
+        }
+        else
+        {
+            Persona.KimiOptions = new KimiProfileOptions
+            {
+                ThinkingMode = NormalizeThinkingMode(ChoiceValue(ThinkingModeBox, "default")),
+                PlanMode = PlanModeCheckBox.IsChecked == true,
+                SkillsDirs = _kimiSkillsDirs.Select(x => x.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).ToList(),
+                McpConfigFile = KimiMcpConfigBox.Text.Trim(),
+                AdditionalDirs = _kimiAdditionalDirs.Select(x => x.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).ToList()
+            };
+            var migration = KimiPersonaMigration.Normalize(Persona);
+            if (migration.HasBlockingIssues)
+            {
+                UpdateKimiMigrationWarning(isKimi, migration);
+                WpfMessageBox.Show(migration.BuildBlockingMessage(), "Kimi profile migration", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            Persona.EnvVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
         DialogResult = true;
         Close();
     }
@@ -376,13 +554,118 @@ public partial class PersonaEditorWindow : Window
         RefreshEnvVarsList();
     }
 
+    private void AddKimiSkillsDir_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select a Kimi skills directory",
+            UseDescriptionForTitle = true
+        };
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+            return;
+
+        var selected = dialog.SelectedPath.Trim();
+        if (_kimiSkillsDirs.Any(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        _kimiSkillsDirs.Add(selected);
+        RefreshKimiSkillsDirsList();
+    }
+
+    private void RemoveKimiSkillsDir_Click(object sender, RoutedEventArgs e)
+    {
+        if (KimiSkillsDirsList.SelectedItem is not string selected || string.IsNullOrWhiteSpace(selected)) return;
+        _kimiSkillsDirs.RemoveAll(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase));
+        RefreshKimiSkillsDirsList();
+    }
+
+    private void BrowseKimiMcpConfig_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new WinOpenFileDialog
+        {
+            Title = "Select a Kimi MCP config file",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false,
+            Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dialog.FileName))
+        {
+            _kimiMcpConfigFile = dialog.FileName.Trim();
+            KimiMcpConfigBox.Text = _kimiMcpConfigFile;
+        }
+    }
+
+    private void AddKimiAdditionalDir_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select an additional workspace directory",
+            UseDescriptionForTitle = true
+        };
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+            return;
+
+        var selected = dialog.SelectedPath.Trim();
+        if (_kimiAdditionalDirs.Any(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        _kimiAdditionalDirs.Add(selected);
+        RefreshKimiAdditionalDirsList();
+    }
+
+    private void RemoveKimiAdditionalDir_Click(object sender, RoutedEventArgs e)
+    {
+        if (KimiAdditionalDirsList.SelectedItem is not string selected || string.IsNullOrWhiteSpace(selected)) return;
+        _kimiAdditionalDirs.RemoveAll(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase));
+        RefreshKimiAdditionalDirsList();
+    }
+
     private void ComboWithChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (sender is not WpfComboBox box || box.SelectedItem is not Choice choice) return;
         box.ToolTip = choice.Description;
 
+        if (ReferenceEquals(box, ModelBox))
+            UpdateProviderAwareUi();
+
+        if (ReferenceEquals(box, ThinkingModeBox))
+            _kimiThinkingMode = choice.Value;
+
         if (ReferenceEquals(box, TemplateBox))
             _selectedTemplatePath = choice.Value;
+    }
+
+    private void UpdateKimiMigrationWarning(bool? forceIsKimi = null, KimiPersonaMigrationResult? result = null)
+    {
+        var isKimi = forceIsKimi ?? IsKimiProviderSelected();
+        var migration = result ?? _kimiMigrationResult;
+        if (!isKimi || (migration.Warnings.Count == 0 && !migration.HasBlockingIssues))
+        {
+            KimiMigrationWarningBorder.Visibility = Visibility.Collapsed;
+            KimiMigrationWarningText.Text = string.Empty;
+            return;
+        }
+
+        var lines = new List<string>();
+        if (migration.Warnings.Count > 0)
+        {
+            lines.Add("Kimi profile migration note:");
+            lines.AddRange(migration.Warnings.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        if (migration.HasBlockingIssues)
+        {
+            if (lines.Count > 0)
+                lines.Add(string.Empty);
+            lines.Add(migration.BuildBlockingMessage());
+        }
+
+        KimiMigrationWarningText.Text = string.Join(Environment.NewLine, lines);
+        KimiMigrationWarningBorder.Visibility = Visibility.Visible;
     }
 
     private void OpenTemplatesFolder_Click(object sender, RoutedEventArgs e)

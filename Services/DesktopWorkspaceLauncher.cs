@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text;
 using System.Threading;
@@ -45,6 +46,12 @@ public sealed class DesktopWorkspaceLaunchPlan
     public string PersonaId { get; set; } = "";
     public string PersonaName { get; set; } = "";
     public string CodexProfileName { get; set; } = "";
+    public string RequestedProfileName { get; set; } = "";
+    public string RequestedCodexProfileName { get; set; } = "";
+    public string ProfileLaunchMethod { get; set; } = "";
+    public string ProfileVerificationStatus { get; set; } = "Profile unverified";
+    public string CommandPreview { get; set; } = "";
+    public string[] ProfileOverrideArgs { get; set; } = Array.Empty<string>();
 
     public string WorkspaceId { get; set; } = "";
     public string WorkspaceName { get; set; } = "";
@@ -158,6 +165,8 @@ public sealed class DesktopWorkspaceLauncher
             PersonaId = persona.Id,
             PersonaName = persona.Name,
             CodexProfileName = profileName,
+            RequestedProfileName = persona.Name,
+            RequestedCodexProfileName = profileName,
             WorkspaceId = ws.Id,
             WorkspaceName = ws.Name,
             WorkspacePath = Path.GetFullPath(ws.Path),
@@ -174,25 +183,29 @@ public sealed class DesktopWorkspaceLauncher
         plan.DeepLinkVariants = BuildCodexWorkspaceUriVariants(ws.Path);
         plan.DeepLinkUri = plan.DeepLinkVariants[0].ActivationUri;
 
-        if (!string.IsNullOrWhiteSpace(detection.ExecutablePath))
-        {
-            plan.BaseLaunchMethod = "desktop_exe";
-            plan.CanLaunch = true;
-        }
-        else if (!string.IsNullOrWhiteSpace(detection.CliPath))
+        if (!string.IsNullOrWhiteSpace(detection.CliPath))
         {
             plan.BaseLaunchMethod = "codex_app";
             plan.CanLaunch = true;
+            plan.ProfileLaunchMethod = "codex app -c profile";
+        }
+        else if (!string.IsNullOrWhiteSpace(detection.ExecutablePath))
+        {
+            plan.BaseLaunchMethod = "desktop_exe";
+            plan.CanLaunch = true;
+            plan.ProfileLaunchMethod = "desktop_exe";
         }
         else
         {
             plan.BaseLaunchMethod = "unavailable";
             plan.CanLaunch = false;
+            plan.ProfileLaunchMethod = "unavailable";
         }
 
         if (!plan.CanLaunch)
         {
             plan.FailureReason = "No valid Desktop launch method was detected.";
+            plan.ProfileVerificationStatus = "Profile unverified";
         }
 
         LogPlan(plan);
@@ -217,13 +230,21 @@ public sealed class DesktopWorkspaceLauncher
                 UseShellExecute = false,
                 WorkingDirectory = plan.WorkspacePath
             };
+            plan.ProfileLaunchMethod = "desktop_exe";
+            plan.ProfileOverrideArgs = Array.Empty<string>();
+            plan.ProfileVerificationStatus = "Profile unverified";
+            plan.CommandPreview = BuildExecutableCommandPreview(plan.DesktopExecutablePath, plan.WorkspacePath);
         }
         else if (string.Equals(plan.BaseLaunchMethod, "codex_app", StringComparison.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(plan.CliFallbackPath))
                 throw new FileNotFoundException("Codex CLI fallback is not available.");
 
-            psi = _processManager.CreateCodexAppProcessStartInfo(plan.CodexHome, plan.WorkspacePath);
+            psi = _processManager.CreateCodexAppProcessStartInfo(plan.CodexHome, plan.WorkspacePath, plan.CodexProfileName);
+            plan.ProfileLaunchMethod = "codex app -c profile";
+            plan.ProfileOverrideArgs = BuildCodexAppProfileOverrideArgs(plan.WorkspacePath, plan.CodexProfileName);
+            plan.ProfileVerificationStatus = "Profile override passed";
+            plan.CommandPreview = BuildCodexAppCommandPreview(plan.CodexProfileName, plan.WorkspacePath);
         }
         else
         {
@@ -232,6 +253,15 @@ public sealed class DesktopWorkspaceLauncher
 
         return psi;
     }
+
+    private static string[] BuildCodexAppProfileOverrideArgs(string workspacePath, string codexProfileName) =>
+        new[] { "app", "-c", $@"profile=""{codexProfileName}""", workspacePath };
+
+    private static string BuildCodexAppCommandPreview(string codexProfileName, string workspacePath) =>
+        $"codex app -c profile=\"{codexProfileName}\" {CodexProcessManager.QuoteForCmd(workspacePath)}";
+
+    private static string BuildExecutableCommandPreview(string executablePath, string workspacePath) =>
+        $"{CodexProcessManager.QuoteForCmd(executablePath)} {CodexProcessManager.QuoteForCmd(workspacePath)}";
 
     public Process StartBaseLaunchAndQueueWorkspaceBinding(DesktopWorkspaceLaunchPlan plan, ProcessStartInfo psi, Action<Process>? onStarted = null)
     {
@@ -439,6 +469,15 @@ public sealed class DesktopWorkspaceLauncher
         var sb = new StringBuilder();
         sb.AppendLine($"Launch ID: {plan.LaunchId}");
         sb.AppendLine($"Generated At: {plan.GeneratedAt}");
+        sb.AppendLine($"Selected Persona: {plan.PersonaName} ({plan.PersonaId})");
+        sb.AppendLine($"Selected Codex Profile: {plan.CodexProfileName}");
+        sb.AppendLine($"Requested Profile Name: {plan.RequestedProfileName}");
+        sb.AppendLine($"Requested Codex Profile Name: {plan.RequestedCodexProfileName}");
+        sb.AppendLine($"Profile Launch Method: {plan.ProfileLaunchMethod}");
+        sb.AppendLine($"Profile Verification Status: {plan.ProfileVerificationStatus}");
+        sb.AppendLine($"Command Preview: {plan.CommandPreview}");
+        var profileOverrideArgs = plan.ProfileOverrideArgs ?? Array.Empty<string>();
+        sb.AppendLine($"Profile Override Args: {(profileOverrideArgs.Length == 0 ? "<none>" : string.Join(" ", profileOverrideArgs.Select(CodexProcessManager.QuoteForCmd)))}");
         sb.AppendLine($"Expected Workspace Path: {plan.WorkspacePath}");
             sb.AppendLine($"Protocol Detected: {plan.ProtocolDetected}");
             sb.AppendLine($"Protocol Source: {plan.ProtocolSource ?? "<none>"}");

@@ -39,6 +39,8 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile name" Margin="0,6" VerticalAlignment="Center"
@@ -53,9 +55,9 @@
                           ItemTemplate="{StaticResource ChoiceItemTemplate}"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" Margin="0,6" VerticalAlignment="Center"
-                           ToolTip="Model used by this Codex profile. Availability depends on your Codex account or plan."/>
+                           ToolTip="Provider is inferred from the selected model. Codex models keep Codex controls; Kimi models disable unsupported Codex-only fields."/>
                 <ComboBox x:Name="ModelBox" Grid.Row="2" Grid.Column="1" Margin="0,4"
-                          ToolTip="Model used by this Codex profile. Availability depends on your Codex account or plan."
+                          ToolTip="Provider is inferred from the selected model. Codex models keep Codex controls; Kimi models disable unsupported Codex-only fields."
                           ItemTemplate="{StaticResource ChoiceItemTemplate}"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Reasoning effort" Margin="0,6" VerticalAlignment="Center"
@@ -86,13 +88,13 @@
                            ToolTip="Open templates, open this profile's linked template, or request Codex-level AGENTS.md refresh."/>
                 <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,4">
                     <Button Content="📋 Templates" Width="120" Margin="0,0,8,0"
-                            Click="OpenTemplatesFolder_Click"
+                            x:Name="OpenTemplatesButton" Click="OpenTemplatesFolder_Click"
                             ToolTip="Open the role templates/personas folder."/>
                     <Button Content="📝 Linked" Width="110" Margin="0,0,8,0"
-                            Click="OpenLinkedTemplate_Click"
+                            x:Name="OpenLinkedTemplateButton" Click="OpenLinkedTemplate_Click"
                             ToolTip="Open or create this profile's linked role template."/>
                     <Button Content="↻ Instructions" Width="110"
-                            Click="RequestInstructionsRefresh_Click"
+                            x:Name="InstructionsRefreshButton" Click="RequestInstructionsRefresh_Click"
                             ToolTip="Request regeneration of config.toml profile references, profile instruction files, and compact AGENTS.md after saving this profile."/>
                 </StackPanel>
 
@@ -111,9 +113,96 @@
                             ToolTip="Refresh the role template list from the user templates/personas folder."/>
                 </Grid>
 
-                <TextBlock Grid.Row="9" Grid.Column="0" Text="Extra CLI args" Margin="0,6" VerticalAlignment="Top"
+                <TextBlock Grid.Row="9" Grid.Column="0" Text="Kimi options" Margin="0,6" VerticalAlignment="Top"
+                           ToolTip="Safe optional Kimi CLI controls exposed by the profile editor."/>
+                <Border x:Name="KimiOptionsBorder" Grid.Row="10" Grid.Column="1" Margin="0,4" Padding="8" BorderBrush="#30363d" BorderThickness="1" CornerRadius="6" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border x:Name="KimiMigrationWarningBorder" Grid.Row="0" Grid.ColumnSpan="4" Margin="0,0,0,8" Padding="8"
+                                BorderBrush="#d29922" BorderThickness="1" CornerRadius="6" Background="#1c1610" Visibility="Collapsed">
+                            <TextBlock x:Name="KimiMigrationWarningText" TextWrapping="Wrap" Foreground="#f2cc60"/>
+                        </Border>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Thinking mode" Margin="0,6" VerticalAlignment="Center"
+                                   ToolTip="Choose whether Kimi should think by default for this profile."/>
+                        <ComboBox x:Name="ThinkingModeBox" Grid.Row="1" Grid.Column="1" Margin="0,4,0,4"
+                                  ToolTip="Choose whether Kimi should think by default for this profile."
+                                  ItemTemplate="{StaticResource ChoiceItemTemplate}"/>
+                        <CheckBox x:Name="PlanModeCheckBox" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Margin="12,4,0,4"
+                                  Content="Start in plan mode"
+                                  ToolTip="Start Kimi in plan mode for this profile."/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Skills directories" Margin="0,6" VerticalAlignment="Top"
+                                   ToolTip="One or more directories of reusable Kimi skills."/>
+                        <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4,0,4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ListBox x:Name="KimiSkillsDirsList" Grid.Row="0" Grid.ColumnSpan="3" Height="95"
+                                     ToolTip="Current Kimi skills directories for this profile."/>
+                            <Button x:Name="AddKimiSkillsDirButton" Grid.Row="1" Grid.Column="1" Width="90" Margin="0,8,8,0" Content="Add folder"
+                                    Click="AddKimiSkillsDir_Click" ToolTip="Add a Kimi skills directory."/>
+                            <Button x:Name="RemoveKimiSkillsDirButton" Grid.Row="1" Grid.Column="2" Width="100" Margin="0,8,0,0" Content="Remove"
+                                    Click="RemoveKimiSkillsDir_Click" ToolTip="Remove the selected Kimi skills directory."/>
+                        </Grid>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="MCP config file" Margin="0,6" VerticalAlignment="Center"
+                                   ToolTip="Optional Kimi MCP configuration file."/>
+                        <Grid Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="KimiMcpConfigBox" Grid.Column="0" Margin="0,0,8,0"
+                                     ToolTip="Optional Kimi MCP configuration file path."/>
+                            <Button x:Name="BrowseKimiMcpConfigButton" Grid.Column="1" Width="90" Content="Browse"
+                                    Click="BrowseKimiMcpConfig_Click" ToolTip="Select a Kimi MCP config file."/>
+                        </Grid>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Additional dirs" Margin="0,6" VerticalAlignment="Top"
+                                   ToolTip="Optional additional workspace directories available to Kimi."/>
+                        <Grid Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4,0,4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ListBox x:Name="KimiAdditionalDirsList" Grid.Row="0" Grid.ColumnSpan="3" Height="95"
+                                     ToolTip="Current additional workspace directories for this profile."/>
+                            <Button x:Name="AddKimiAdditionalDirButton" Grid.Row="1" Grid.Column="1" Width="90" Margin="0,8,8,0" Content="Add folder"
+                                    Click="AddKimiAdditionalDir_Click" ToolTip="Add an additional workspace directory."/>
+                            <Button x:Name="RemoveKimiAdditionalDirButton" Grid.Row="1" Grid.Column="2" Width="100" Margin="0,8,0,0" Content="Remove"
+                                    Click="RemoveKimiAdditionalDir_Click" ToolTip="Remove the selected additional workspace directory."/>
+                        </Grid>
+                    </Grid>
+                </Border>
+
+                <TextBlock Grid.Row="11" Grid.Column="0" Text="Extra CLI args" Margin="0,6" VerticalAlignment="Top"
                            ToolTip="Additional Codex CLI arguments. Use only known valid Codex flags."/>
-                <Border Grid.Row="10" Grid.Column="1" Margin="0,4" Padding="8" BorderBrush="#30363d" BorderThickness="1" CornerRadius="6">
+                <Border x:Name="CliArgsBorder" Grid.Row="12" Grid.Column="1" Margin="0,4" Padding="8" BorderBrush="#30363d" BorderThickness="1" CornerRadius="6">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -142,9 +231,9 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Grid.Row="11" Grid.Column="0" Text="Env vars" Margin="0,6" VerticalAlignment="Top"
+                <TextBlock Grid.Row="13" Grid.Column="0" Text="Env vars" Margin="0,6" VerticalAlignment="Top"
                            ToolTip="Environment variables injected into launched Codex sessions for this profile."/>
-                <Border Grid.Row="12" Grid.Column="1" Margin="0,4" Padding="8" BorderBrush="#30363d" BorderThickness="1" CornerRadius="6">
+                <Border x:Name="EnvVarsBorder" Grid.Row="14" Grid.Column="1" Margin="0,4" Padding="8" BorderBrush="#30363d" BorderThickness="1" CornerRadius="6">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -173,7 +262,7 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Grid.Row="13" Grid.Column="1" Margin="0,10,0,0" Foreground="#8b949e" TextWrapping="Wrap"
+                <TextBlock Grid.Row="15" Grid.Column="1" Margin="0,10,0,0" Foreground="#8b949e" TextWrapping="Wrap"
                            Text="Tip: Hover labels or controls for a short explanation of what each setting does."/>
             </Grid>
         </ScrollViewer>

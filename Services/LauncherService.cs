@@ -29,11 +29,12 @@ public class LauncherService
     private readonly CodexProcessManager _processManager;
     private readonly DesktopWorkspaceLauncher _desktopWorkspaceLauncher;
     private readonly GitStateGuard _gitGuard;
+    private readonly KimiCliManager _kimiCliManager;
     private readonly LogService _log;
     private readonly ConfigService _config;
     private bool _launchInProgress;
 
-    public LauncherService(AccountManager am, PersonaEngine pe, SessionManager sm, CodexProcessManager pm, DesktopWorkspaceLauncher desktopWorkspaceLauncher, GitStateGuard gg, LogService log, ConfigService config)
+    public LauncherService(AccountManager am, PersonaEngine pe, SessionManager sm, CodexProcessManager pm, DesktopWorkspaceLauncher desktopWorkspaceLauncher, GitStateGuard gg, KimiCliManager kimiCliManager, LogService log, ConfigService config)
     {
         _accountManager = am;
         _personaEngine = pe;
@@ -41,6 +42,7 @@ public class LauncherService
         _processManager = pm;
         _desktopWorkspaceLauncher = desktopWorkspaceLauncher;
         _gitGuard = gg;
+        _kimiCliManager = kimiCliManager;
         _log = log;
         _config = config;
     }
@@ -105,6 +107,9 @@ public class LauncherService
             if (IsGitGuardEnabled()) _gitGuard.Check(ws.Path);
             var accountPath = JunctionManager.GetAccountProfilePath(acct.Id);
             var profileName = PersonaEngine.GetProfileName(persona);
+            var unmanagedDesktopReason = GetUnmanagedDesktopLaunchBlockReason(_sessionManager.Active, _processManager.GetLiveDesktopTargets(), _sessionManager.InspectSession);
+            if (!string.IsNullOrWhiteSpace(unmanagedDesktopReason))
+                throw new InvalidOperationException(unmanagedDesktopReason);
             var previousActiveAccountId = JunctionManager.LoadActiveAccount();
             var previousDesktopSession = CaptureRecoverableDesktopSession(previousActiveAccountId);
             var preparation = PrepareDesktopLaunch(acct, persona, ws, accountPath, profileName);
@@ -160,7 +165,8 @@ public class LauncherService
                 AccountId = acct.Id,
                 PersonaId = persona.Id,
                 WorkspaceId = ws.Id,
-                Type = "cli"
+                Type = "cli",
+                AccountProvider = acct.ResolvedProvider
             };
 
             var args = BuildCodexArgs(profileName, persona, ws);
@@ -237,6 +243,59 @@ public class LauncherService
         });
     }
 
+    public string BuildKimiLaunchPreview(Account acct, Persona? persona, Workspace ws) =>
+        _kimiCliManager.BuildLaunchPreview(acct, persona, ws);
+
+    public void LaunchKimiCompanion(Account acct, Persona? persona, Workspace ws)
+    {
+        RunUnderLaunchLock(() =>
+        {
+            _log.Info($"LaunchKimiCompanion: account={acct.Name} ({acct.Id}), workspace={ws.Name} ({ws.Id}) path={ws.Path}, persona={(persona?.Name ?? "(none)")}");
+
+            if (persona == null)
+                throw new InvalidOperationException("Selected profile is invalid.");
+
+            ValidateKimiLaunchInputs(acct, persona, ws);
+            if (IsGitGuardEnabled()) _gitGuard.Check(ws.Path);
+
+            var settings = LoadSettings();
+            var session = new Session
+            {
+                AccountId = acct.Id,
+                WorkspaceId = ws.Id,
+                Type = "kimi-cli",
+                AccountProvider = acct.ResolvedProvider
+            };
+
+            var setup = _kimiCliManager.PrepareLaunch(session.Id, acct, persona, ws, settings.PreferWindowsTerminalForCli);
+            session.StartedMarkerPath = Path.Combine(setup.SessionDirectory, "started.txt");
+            session.ExitMarkerPath = Path.Combine(setup.SessionDirectory, "exit.txt");
+            session.StopMarkerPath = Path.Combine(setup.SessionDirectory, "stop.txt");
+            session.LauncherScriptPath = setup.LaunchScriptPath;
+            session.KillMarker = "CEM_KIMI_SESSION_" + session.Id;
+            session.TerminalWindowName = "CodexEnvironmentManager";
+
+            WriteKimiLaunchPlan(session.Id, acct, persona, ws, setup);
+
+            _log.Info($"Spawning Kimi CLI through launcher script: {setup.LaunchScriptPath}");
+            var proc = Process.Start(setup.StartInfo);
+
+            session.ProcessId = setup.UsesWindowsTerminal ? null : proc?.Id;
+            _sessionManager.Register(session);
+
+            if (proc != null)
+            {
+                _log.Info(setup.UsesWindowsTerminal
+                    ? $"Kimi CLI launched in Windows Terminal; tracking session {session.Id} by marker/script only (wt PID {proc.Id})."
+                    : $"Kimi CLI launcher PID {proc.Id}, session {session.Id}");
+            }
+            else
+            {
+                _log.Warn($"Kimi CLI Process.Start returned null, but session {session.Id} was registered for marker/script tracking.");
+            }
+        });
+    }
+
     private void RunUnderLaunchLock(Action action)
     {
         if (_launchInProgress)
@@ -280,6 +339,29 @@ public class LauncherService
         {
             if (!IsSafeConfigKey(key))
                 throw new InvalidOperationException($"Unsafe Codex config key in persona '{persona.Name}': {key}");
+        }
+
+        ValidateProviderCompatibility(acct, persona);
+    }
+
+    private void ValidateKimiLaunchInputs(Account acct, Persona persona, Workspace ws)
+    {
+        if (string.IsNullOrWhiteSpace(ws.Path) || !Directory.Exists(ws.Path))
+            throw new DirectoryNotFoundException($"Workspace path does not exist: {ws.Path}");
+
+        ValidateProviderCompatibility(acct, persona);
+    }
+
+    private static void ValidateProviderCompatibility(Account acct, Persona persona)
+    {
+        var accountProvider = ProviderCapabilities.ForProvider(acct.ResolvedProvider).ProviderId;
+        var personaProvider = ProviderCapabilities.ForModel(persona.Model).ProviderId;
+
+        if (!string.Equals(accountProvider, personaProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Provider mismatch: account '{acct.Name}' is {accountProvider}, but profile '{persona.Name}' is {personaProvider}. " +
+                "Select a matching account and profile before launching.");
         }
     }
 
@@ -425,14 +507,14 @@ public class LauncherService
     private static string EscapePowerShellSingleQuoted(string value) =>
         (value ?? string.Empty).Replace("'", "''");
 
-    private void WriteActiveContext(string accountPath, string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs)
+    private void WriteActiveContext(string accountPath, string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs, string? commandPreviewOverride = null)
     {
-        var context = BuildLaunchContext(launchType, sessionId, acct, persona, ws, accountPath, profileName, instructionsFile, codexPath, codexArgs);
+        var context = BuildLaunchContext(launchType, sessionId, acct, persona, ws, accountPath, profileName, instructionsFile, codexPath, codexArgs, commandPreviewOverride);
         var json = JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(Path.Combine(accountPath, "CEM_ACTIVE_CONTEXT.json"), json, Encoding.UTF8);
     }
 
-    private object BuildLaunchContext(string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string accountPath, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs)
+    private object BuildLaunchContext(string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string accountPath, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs, string? commandPreviewOverride = null)
     {
         return new
         {
@@ -452,7 +534,7 @@ public class LauncherService
             InstructionsFile = instructionsFile,
             CodexPath = codexPath,
             CodexArgs = codexArgs,
-            CommandPreview = codexPath == null || codexArgs == null ? null : CodexProcessManager.QuoteForCmd(codexPath) + " " + string.Join(" ", codexArgs.Select(CodexProcessManager.QuoteForCmd)),
+            CommandPreview = commandPreviewOverride ?? (codexPath == null || codexArgs == null ? null : CodexProcessManager.QuoteForCmd(codexPath) + " " + string.Join(" ", codexArgs.Select(CodexProcessManager.QuoteForCmd))),
             Verification = new
             {
                 Contract = "CEM expects Codex to use this CODEX_HOME, Codex profile, and workspace. Verify with the visible Codex model/directory banner and by reading CEM_ACTIVE_CONTEXT.json.",
@@ -462,12 +544,12 @@ public class LauncherService
         };
     }
 
-    private void WriteLaunchPlan(string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string accountPath, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs)
+    private void WriteLaunchPlan(string launchType, string? sessionId, Account acct, Persona persona, Workspace ws, string accountPath, string profileName, string? instructionsFile, string? codexPath, string[]? codexArgs, string? commandPreviewOverride = null)
     {
         var sessionsDir = Path.Combine(JunctionManager.SwitcherDir, "sessions");
         Directory.CreateDirectory(sessionsDir);
 
-        var plan = BuildLaunchContext(launchType, sessionId, acct, persona, ws, accountPath, profileName, instructionsFile, codexPath, codexArgs);
+        var plan = BuildLaunchContext(launchType, sessionId, acct, persona, ws, accountPath, profileName, instructionsFile, codexPath, codexArgs, commandPreviewOverride);
 
         var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(Path.Combine(JunctionManager.SwitcherDir, "last_launch_plan.json"), json, Encoding.UTF8);
@@ -478,6 +560,41 @@ public class LauncherService
             Directory.CreateDirectory(sessionDir);
             File.WriteAllText(Path.Combine(sessionDir, "launch_plan.json"), json, Encoding.UTF8);
         }
+    }
+
+    private void WriteKimiLaunchPlan(string sessionId, Account acct, Persona? persona, Workspace ws, KimiLaunchSetup setup)
+    {
+        var plan = new
+        {
+            GeneratedAt = DateTime.Now.ToString("O"),
+            LaunchType = "kimi-cli",
+            SessionId = sessionId,
+            Account = new { acct.Id, acct.Name, acct.Provider, acct.Type },
+            KimiCodeHome = KimiCliManager.GetKimiCodeHome(acct),
+            SelectedProfile = persona?.Name,
+            SelectedModel = persona?.Model,
+            Workspace = new { ws.Id, ws.Name, ws.Path },
+            KimiExecutablePath = setup.KimiExecutablePath,
+            AgentFilePath = setup.AgentFilePath,
+            PromptFilePath = setup.PromptFilePath,
+            RoleTemplatePath = setup.RoleTemplatePath,
+            LaunchScriptPath = setup.LaunchScriptPath,
+            KillMarker = "CEM_KIMI_SESSION_" + sessionId,
+            ExtraArgs = setup.ExtraArgs,
+            LaunchArgs = setup.LaunchArgs,
+            KimiOptions = setup.KimiOptions,
+            CommandPreview = "kimi " + string.Join(" ", setup.LaunchArgs
+                .Select(CodexProcessManager.QuoteForCmd)),
+            RuntimeNotes = new
+            {
+                KimiAuth = "Managed by Kimi login/setup; CEM does not copy or store credentials.",
+                ArtifactLocation = setup.SessionDirectory
+            }
+        };
+
+        var json = JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(Path.Combine(setup.SessionDirectory, "launch_plan.json"), json, Encoding.UTF8);
+        File.WriteAllText(Path.Combine(JunctionManager.SwitcherDir, "last_kimi_launch_plan.json"), json, Encoding.UTF8);
     }
 
     private static string[] BuildCodexArgs(string profileName, Persona persona, Workspace ws)
@@ -607,6 +724,32 @@ public class LauncherService
         return previousActiveAccountId;
     }
 
+    private static string? GetUnmanagedDesktopLaunchBlockReason(IReadOnlyCollection<Session> activeSessions, IReadOnlyCollection<DesktopProcessTarget> liveDesktopTargets, Func<Session, SessionInspectionResult> inspectSession)
+    {
+        if (liveDesktopTargets.Count == 0)
+            return null;
+
+        var trackedLiveDesktopPids = new HashSet<int>();
+        foreach (var session in activeSessions.Where(s => s.Type.StartsWith("desktop", StringComparison.OrdinalIgnoreCase)))
+        {
+            var inspection = inspectSession(session);
+            if (inspection.State != SessionLiveState.Live || !inspection.TargetProcessId.HasValue)
+                continue;
+
+            trackedLiveDesktopPids.Add(inspection.TargetProcessId.Value);
+        }
+
+        var unmanagedTargets = liveDesktopTargets
+            .Where(target => !trackedLiveDesktopPids.Contains(target.ProcessId))
+            .ToList();
+
+        if (unmanagedTargets.Count == 0)
+            return null;
+
+        var details = string.Join(", ", unmanagedTargets.Select(target => $"{target.Name} PID {target.ProcessId}"));
+        return "Codex Desktop is already running outside CEM tracking. Close it first or attach/kill it manually before launching a profile-specific Desktop session. Detected unmanaged process(es): " + details + ".";
+    }
+
     private (DesktopWorkspaceLaunchPlan LaunchPlan, ProcessStartInfo Psi, string InstructionsFile) PrepareDesktopLaunch(Account acct, Persona persona, Workspace ws, string accountPath, string profileName)
     {
         var settings = LoadSettings();
@@ -615,14 +758,14 @@ public class LauncherService
             throw new InvalidOperationException(launchPlan.FailureReason ?? "No valid Desktop launch method is available.");
 
         var instructionsFile = _personaEngine.ApplyToWorkspace(ws, acct, persona, false);
-        WriteActiveContext(accountPath, "desktop", null, acct, persona, ws, profileName, instructionsFile, null, null);
         _personaEngine.ApplyToAccount(acct, persona, instructionsFile, _config.LoadList<Persona>("personas"));
         PersonaEngine.EnsureAccountRuntimeConfig(acct.Id, ws.Path, settings.WindowsSandboxMode, settings.TrustWorkspaceOnLaunch);
         PersonaEngine.ValidateAccountProfileExists(acct.Id, profileName);
 
         var psi = _desktopWorkspaceLauncher.CreateBaseLaunchStartInfo(launchPlan);
         ApplyEnvironment(psi, acct, persona, accountPath, includeApiKeyFallback: acct.Type == "api_key");
-        WriteLaunchPlan("desktop", null, acct, persona, ws, accountPath, profileName, instructionsFile, null, null);
+        WriteActiveContext(accountPath, "desktop", null, acct, persona, ws, profileName, instructionsFile, psi.FileName, psi.ArgumentList.ToArray(), launchPlan.CommandPreview);
+        WriteLaunchPlan("desktop", null, acct, persona, ws, accountPath, profileName, instructionsFile, psi.FileName, psi.ArgumentList.ToArray(), launchPlan.CommandPreview);
         return (launchPlan, psi, instructionsFile);
     }
 
@@ -635,8 +778,14 @@ public class LauncherService
             PersonaId = persona.Id,
             WorkspaceId = ws.Id,
             Type = isStoreLaunch ? "desktop_store" : "desktop",
+            AccountProvider = acct.ResolvedProvider,
             ProcessId = isStoreLaunch ? null : proc.Id,
-            IsBestEffortUntracked = isStoreLaunch
+            IsBestEffortUntracked = isStoreLaunch,
+            RequestedProfileName = launchPlan.RequestedProfileName,
+            RequestedCodexProfileName = launchPlan.RequestedCodexProfileName,
+            ProfileLaunchMethod = launchPlan.ProfileLaunchMethod,
+            ProfileVerificationStatus = launchPlan.ProfileVerificationStatus,
+            ProfileLaunchCommandPreview = launchPlan.CommandPreview
         };
 
         if (isStoreLaunch)

@@ -30,13 +30,24 @@ public class AccountManager
         _log = log;
     }
 
-    public List<Account> GetAccounts() => _config.LoadList<Account>("accounts");
+    public List<Account> GetAccounts()
+    {
+        var list = _config.LoadList<Account>("accounts");
+        foreach (var acct in list)
+        {
+            if (string.IsNullOrWhiteSpace(acct.Provider))
+            {
+                acct.Provider = "codex";
+            }
+        }
+        return list;
+    }
 
     public void AddPlusAccount(string name)
     {
         var list = GetAccounts();
         EnsureUniqueName(list, name);
-        var acct = new Account { Name = name, Type = "plus" };
+        var acct = new Account { Name = name, Type = "plus", Provider = "codex" };
         JunctionManager.CreateAccountProfile(acct.Id);
         PersonaEngine.EnsureAccountBaseConfig(acct.Id);
         list.Add(acct);
@@ -51,6 +62,7 @@ public class AccountManager
         {
             Name = name,
             Type = "api_key",
+            Provider = "codex",
             ApiKeyEncrypted = DpapiHelper.EncryptToBase64(apiKey)
         };
         JunctionManager.CreateAccountProfile(acct.Id);
@@ -61,6 +73,41 @@ public class AccountManager
         // Best effort bootstrap. This avoids passing API keys to every future Codex launch.
         // Run in the background so account creation never freezes the WPF UI.
         _ = Task.Run(() => TryBootstrapApiKeyLoginAsync(acct, apiKey));
+    }
+
+    public void AddKimiOAuthAccount(string name)
+    {
+        var list = GetAccounts();
+        EnsureUniqueName(list, name);
+        var acct = new Account
+        {
+            Name = name,
+            Type = "kimi_oauth",
+            Provider = "kimi"
+        };
+        list.Add(acct);
+        _config.SaveList("accounts", list);
+
+        var kimiHome = JunctionManager.GetKimiAccountHomePath(acct.Id);
+        Directory.CreateDirectory(kimiHome);
+    }
+
+    public void AddKimiApiKeyAccount(string name, string apiKey)
+    {
+        var list = GetAccounts();
+        EnsureUniqueName(list, name);
+        var acct = new Account
+        {
+            Name = name,
+            Type = "moonshot_api_key",
+            Provider = "kimi",
+            ApiKeyEncrypted = DpapiHelper.EncryptToBase64(apiKey)
+        };
+        list.Add(acct);
+        _config.SaveList("accounts", list);
+
+        var kimiHome = JunctionManager.GetKimiAccountHomePath(acct.Id);
+        Directory.CreateDirectory(kimiHome);
     }
 
     public bool CanDelete(string accountId)
@@ -74,9 +121,13 @@ public class AccountManager
         if (!CanDelete(id))
             throw new InvalidOperationException("Cannot delete the currently active account. Switch to another account first.");
 
+        var account = GetAccounts().FirstOrDefault(a => a.Id == id);
+        var isKimi = account != null && string.Equals(account.ResolvedProvider, "kimi", StringComparison.OrdinalIgnoreCase);
+
         var path = JunctionManager.GetAccountProfilePath(id);
         var quarantineRoot = Path.Combine(JunctionManager.SwitcherDir, "deleted_accounts");
         var quarantinePath = "";
+        var kimiQuarantinePath = "";
 
         if (Directory.Exists(path))
         {
@@ -98,29 +149,39 @@ public class AccountManager
             }
         }
 
+        if (isKimi)
+        {
+            var kimiPath = JunctionManager.GetKimiAccountHomePath(id);
+            if (Directory.Exists(kimiPath))
+            {
+                Directory.CreateDirectory(quarantineRoot);
+                kimiQuarantinePath = Path.Combine(quarantineRoot, $"kimi_{id}_{DateTime.Now:yyyyMMdd_HHmmss}");
+                ClearReadOnlyAttributes(kimiPath);
+                try
+                {
+                    Directory.Move(kimiPath, kimiQuarantinePath);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    _log?.Warn($"Kimi account home quarantine failed for {id}: {ex.Message}");
+                    // Do not fail the whole deletion; continue and report cleanup needed.
+                }
+            }
+        }
+
         var list = GetAccounts();
         list.RemoveAll(a => a.Id == id);
         _config.SaveList("accounts", list);
 
-        if (string.IsNullOrWhiteSpace(quarantinePath) || !Directory.Exists(quarantinePath))
-        {
-            return new AccountDeleteResult
-            {
-                RemovedFromConfig = true,
-                Quarantined = false,
-                DeletedFromDisk = true,
-                Message = "Account removed. No account folder was found on disk."
-            };
-        }
-
         var deleted = TryDeleteDirectoryWithRetries(quarantinePath, out var lockedPath, out var error);
+        var kimiDeleted = string.IsNullOrWhiteSpace(kimiQuarantinePath) || TryDeleteDirectoryWithRetries(kimiQuarantinePath, out _, out _);
 
-        if (deleted)
+        if (deleted && (string.IsNullOrWhiteSpace(kimiQuarantinePath) || kimiDeleted))
         {
             return new AccountDeleteResult
             {
                 RemovedFromConfig = true,
-                Quarantined = true,
+                Quarantined = !string.IsNullOrWhiteSpace(quarantinePath),
                 DeletedFromDisk = true,
                 QuarantinePath = quarantinePath,
                 Message = "Account removed and account folder deleted."
@@ -130,7 +191,7 @@ public class AccountManager
         return new AccountDeleteResult
         {
             RemovedFromConfig = true,
-            Quarantined = true,
+            Quarantined = !string.IsNullOrWhiteSpace(quarantinePath) || !string.IsNullOrWhiteSpace(kimiQuarantinePath),
             DeletedFromDisk = false,
             QuarantinePath = quarantinePath,
             LockedPath = lockedPath,
@@ -165,6 +226,9 @@ public class AccountManager
     {
         lockedPath = null;
         error = null;
+
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            return true;
 
         for (var attempt = 1; attempt <= 5; attempt++)
         {
@@ -209,13 +273,15 @@ public class AccountManager
     }
 
     public string? DecryptApiKey(Account acct) =>
-        acct.Type == "api_key" && acct.ApiKeyEncrypted != null
+        !string.IsNullOrWhiteSpace(acct.ApiKeyEncrypted)
             ? DpapiHelper.DecryptFromBase64(acct.ApiKeyEncrypted)
             : null;
 
     public async Task<bool> TryBootstrapApiKeyLoginAsync(Account acct, string apiKey)
     {
-        if (acct.Type != "api_key" || string.IsNullOrWhiteSpace(apiKey)) return false;
+        if (string.IsNullOrWhiteSpace(apiKey)) return false;
+        if (!string.Equals(acct.ResolvedProvider, "codex", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(acct.Type, "api_key", StringComparison.OrdinalIgnoreCase)) return false;
 
         if (!CodexProcessManager.TryFindCodexCliExecutable(out var codexPath) || string.IsNullOrWhiteSpace(codexPath))
         {

@@ -102,7 +102,7 @@ public partial class FirstRunWizard : Window
             while (existing.Any(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)))
                 name = baseName + " " + counter++;
 
-            var acct = new Account { Name = name, Type = "plus" };
+            var acct = new Account { Name = name, Type = "plus", Provider = "codex" };
             var result = await Task.Run(() =>
             {
                 JunctionManager.CreateAccountProfile(acct.Id);

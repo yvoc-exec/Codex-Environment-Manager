@@ -18,6 +18,9 @@ public static class JunctionManager
     public static string GetAccountProfilePath(string accountId) =>
         Path.Combine(SwitcherDir, "accounts", accountId);
 
+    public static string GetKimiAccountHomePath(string accountId) =>
+        Path.Combine(SwitcherDir, "kimi-accounts", accountId);
+
     public static void CreateAccountProfile(string accountId)
     {
         var path = GetAccountProfilePath(accountId);

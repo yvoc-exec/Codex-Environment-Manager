@@ -3,6 +3,7 @@ namespace CodexEnvironmentManager.Models;
 public class AppSettings
 {
     public string CodexDesktopPath { get; set; } = "";
+    public string KimiCliPath { get; set; } = "";
     public bool OnboardingCompleted { get; set; } = false;
     public bool MinimizeToTray { get; set; } = true;
     public bool GitGuardEnabled { get; set; } = true;

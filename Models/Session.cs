@@ -10,7 +10,13 @@ public class Session
     public string PersonaId { get; set; } = "";
     public string WorkspaceId { get; set; } = "";
     public string Type { get; set; } = "desktop";
+    public string AccountProvider { get; set; } = "codex";
     public int? ProcessId { get; set; }
+    public string RequestedProfileName { get; set; } = "";
+    public string RequestedCodexProfileName { get; set; } = "";
+    public string ProfileLaunchMethod { get; set; } = "";
+    public string ProfileVerificationStatus { get; set; } = "";
+    public string ProfileLaunchCommandPreview { get; set; } = "";
     public string StartedMarkerPath { get; set; } = "";
     public string ExitMarkerPath { get; set; } = "";
     public string StopMarkerPath { get; set; } = "";
@@ -32,5 +38,8 @@ public class Session
     public string WorkspaceName { get; set; } = "";
 
     [JsonIgnore]
-    public string DisplayName => $"{AccountName} + {PersonaName} + {WorkspaceName}";
+    public string DisplayName =>
+        string.Equals(Type, "kimi-cli", StringComparison.OrdinalIgnoreCase)
+            ? $"Kimi + {WorkspaceName}"
+            : $"{AccountName} + {PersonaName} + {WorkspaceName}";
 }
