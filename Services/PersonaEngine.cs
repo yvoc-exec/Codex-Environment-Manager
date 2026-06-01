@@ -711,7 +711,7 @@ public class PersonaEngine
         if (!File.Exists(configPath)) return;
 
         var toml = File.ReadAllText(configPath);
-        if (Regex.IsMatch(toml, @"^profile\s*=\s*\"cem_", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+        if (Regex.IsMatch(toml, @"^profile\s*=\s*""cem_", RegexOptions.Multiline | RegexOptions.IgnoreCase))
         {
             throw new InvalidOperationException(
                 $"Account config.toml still contains a legacy CEM profile selector. " +

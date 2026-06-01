@@ -611,7 +611,7 @@ public class LauncherService
     {
         var skipNextFor = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "--sandbox", "--ask-for-approval", "--model", "-m", "--profile", "-p", "--cd", "-C"
+            "--sandbox", "--ask-for-approval", "--model", "-m", "--profile", "-p", "--cd"
         };
 
         var list = args?.ToList() ?? new List<string>();
@@ -621,7 +621,7 @@ public class LauncherService
             if (string.IsNullOrWhiteSpace(arg)) continue;
 
             var key = arg.Contains('=') ? arg[..arg.IndexOf('=')] : arg;
-            if (skipNextFor.Contains(key))
+            if (skipNextFor.Contains(key) || string.Equals(key, "-C", StringComparison.Ordinal))
             {
                 if (!arg.Contains('=') && i + 1 < list.Count) i++;
                 continue;

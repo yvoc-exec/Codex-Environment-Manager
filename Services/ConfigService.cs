@@ -294,7 +294,7 @@ public class ConfigService
         if (args.Count == 0) return false;
         var skipNextFor = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "--sandbox", "--ask-for-approval", "--model", "-m", "--profile", "-p", "--cd", "-C"
+            "--sandbox", "--ask-for-approval", "--model", "-m", "--profile", "-p", "--cd"
         };
 
         var changed = false;
@@ -303,7 +303,7 @@ public class ConfigService
         {
             var arg = args[i];
             var key = arg.Contains('=') ? arg[..arg.IndexOf('=')] : arg;
-            if (skipNextFor.Contains(key))
+            if (skipNextFor.Contains(key) || string.Equals(key, "-C", StringComparison.Ordinal))
             {
                 changed = true;
                 if (!arg.Contains('=') && i + 1 < args.Count) i++;

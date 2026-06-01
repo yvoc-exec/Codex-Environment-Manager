@@ -2230,12 +2230,13 @@ static class Program
         var result = (IEnumerable<string>)method.Invoke(null, new object[] { args })!;
         var filtered = result.ToList();
 
+        var filteredText = string.Join(" ", filtered);
         AssertEqual(5, filtered.Count, "non-profile-controlled config overrides should be preserved");
-        AssertContains("--color=always", filtered, "--color=always should be preserved");
-        AssertContains("-c", filtered, "-c flag for safe key should be preserved");
-        AssertContains("some_safe_key=value", filtered, "safe config override value should be preserved");
-        AssertContains("--config", filtered, "--config flag for safe key should be preserved");
-        AssertContains("another_safe_key=value", filtered, "safe config override value should be preserved");
+        AssertContains("--color=always", filteredText, "--color=always should be preserved");
+        AssertContains("-c", filteredText, "-c flag for safe key should be preserved");
+        AssertContains("some_safe_key=value", filteredText, "safe config override value should be preserved");
+        AssertContains("--config", filteredText, "--config flag for safe key should be preserved");
+        AssertContains("another_safe_key=value", filteredText, "safe config override value should be preserved");
     }
 
     private static void ConfigService_StripsStalePersistedConfigProfileOverride()
