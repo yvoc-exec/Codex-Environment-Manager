@@ -410,9 +410,8 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
         if (!TryFindCodexCliExecutable(out var codexPath) || string.IsNullOrWhiteSpace(codexPath))
             throw new FileNotFoundException("Codex Desktop executable was not found and Codex CLI is not available for `codex app` fallback.");
 
-        var args = string.IsNullOrWhiteSpace(profileName)
-            ? new[] { "app", workingDirectory }
-            : new[] { "app", "--profile", profileName, workingDirectory };
+        // codex app does not support --profile. Desktop profile behavior is materialized into config.toml before launch.
+        var args = new[] { "app", workingDirectory };
 
         return CreateCodexCliProcessStartInfo(codexPath, accountPath, args);
     }

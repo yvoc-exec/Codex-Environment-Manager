@@ -24,7 +24,10 @@ static class Program
         Run(nameof(DesktopWorkspaceLauncher_Source_DoesNotQueueAttemptWorkspaceBindingAsync), DesktopWorkspaceLauncher_Source_DoesNotQueueAttemptWorkspaceBindingAsync);
         Run(nameof(DesktopWorkspaceLauncher_Source_UsesCodexAppArgsBindingMethod), DesktopWorkspaceLauncher_Source_UsesCodexAppArgsBindingMethod);
         Run(nameof(DesktopWorkspaceLauncher_Source_DoesNotContainCodexThreadsNew), DesktopWorkspaceLauncher_Source_DoesNotContainCodexThreadsNew);
-        Run(nameof(CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride), CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride);
+        Run(nameof(CodexProcessManager_CreateCodexAppProcessStartInfo_DoesNotIncludeProfileOverride), CodexProcessManager_CreateCodexAppProcessStartInfo_DoesNotIncludeProfileOverride);
+        Run(nameof(PersonaEngine_MaterializeProfileForDesktopLaunch_WritesProfileValuesToConfigToml), PersonaEngine_MaterializeProfileForDesktopLaunch_WritesProfileValuesToConfigToml);
+        Run(nameof(PersonaEngine_MaterializeProfileForDesktopLaunch_RemovesPreviousMaterializedBlock), PersonaEngine_MaterializeProfileForDesktopLaunch_RemovesPreviousMaterializedBlock);
+        Run(nameof(PersonaEngine_MaterializeProfileForDesktopLaunch_PreservesWindowsAndProjectsSections), PersonaEngine_MaterializeProfileForDesktopLaunch_PreservesWindowsAndProjectsSections);
         Run(nameof(DesktopWorkspaceLauncher_CreateBaseLaunchStartInfo_PassesCodexProfileName), DesktopWorkspaceLauncher_CreateBaseLaunchStartInfo_PassesCodexProfileName);
         Run(nameof(DesktopLaunchPlan_DefaultsDesktopReadbackFieldsToUnknown), DesktopLaunchPlan_DefaultsDesktopReadbackFieldsToUnknown);
         Run(nameof(DesktopLaunchPlan_PrefersCodexAppWhenCliFallbackIsAvailable), DesktopLaunchPlan_PrefersCodexAppWhenCliFallbackIsAvailable);
@@ -200,7 +203,7 @@ static class Program
         AssertNotContains("codex://threads/new", source, "no runtime code should construct codex://threads/new URIs");
     }
 
-    private static void CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride()
+    private static void CodexProcessManager_CreateCodexAppProcessStartInfo_DoesNotIncludeProfileOverride()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "cem-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -221,21 +224,171 @@ static class Program
                 null);
 
             if (method == null)
-                throw new Exception("CreateCodexAppProcessStartInfo should accept a profileName override for Desktop launches.");
+                throw new Exception("CreateCodexAppProcessStartInfo should accept a profileName parameter for Desktop launches.");
 
             var psi = (ProcessStartInfo)method.Invoke(manager, new object[] { @"E:\Cem", @"D:\Work\Repo", "cem_planner_reviewer_gpt_5_5_high_9b360c9f" })!;
             var args = string.Join(" ", psi.ArgumentList.ToArray());
 
             AssertEqual(fakeCodexPath, psi.FileName, "codex app should use the discovered CLI executable");
             AssertContains("app", args, "codex app launch should include the app subcommand");
-            AssertContains("--profile", args, "codex app launch should pass the profile override");
-            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", args, "codex app launch should explicitly select the requested Codex profile");
+            AssertNotContains("--profile", args, "codex app launch must not pass --profile because codex app does not support it");
+            AssertNotContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", args, "codex app launch must not include profile name in args");
             AssertContains(@"D:\Work\Repo", args, "codex app launch should include the workspace path");
         }
         finally
         {
             Environment.SetEnvironmentVariable("PATH", originalPath);
             try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void PersonaEngine_MaterializeProfileForDesktopLaunch_WritesProfileValuesToConfigToml()
+    {
+        var accountId = "cem-test-" + Guid.NewGuid().ToString("N");
+        var accountDir = JunctionManager.GetAccountProfilePath(accountId);
+        Directory.CreateDirectory(accountDir);
+        var profileName = "cem_test_persona_12345678";
+        var profileConfigPath = Path.Combine(accountDir, profileName + ".config.toml");
+        var configPath = Path.Combine(accountDir, "config.toml");
+
+        File.WriteAllText(profileConfigPath,
+            "# Profile config\n" +
+            "model = \"o4-mini\"\n" +
+            "model_reasoning_effort = \"high\"\n" +
+            "approval_policy = \"none\"\n" +
+            "sandbox_mode = \"none\"\n" +
+            "developer_instructions = \"CEM ACTIVE PROFILE: Test\"\n" +
+            "model_instructions_file = \"instructions.md\"\n" +
+            "approvals_reviewer = \"user\"\n");
+
+        try
+        {
+            var persona = new Persona
+            {
+                Id = "12345678",
+                Name = "Test Persona",
+                ConfigOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model"] = "o4-mini",
+                    ["model_reasoning_effort"] = "high",
+                    ["approval_policy"] = "none",
+                    ["sandbox_mode"] = "none"
+                }
+            };
+
+            PersonaEngine.MaterializeProfileForDesktopLaunch(accountId, persona);
+
+            var config = File.ReadAllText(configPath);
+            AssertContains("# CODEX_ENV_MANAGER_DESKTOP_PROFILE_START", config, "config.toml should contain desktop profile start marker");
+            AssertContains("model = \"o4-mini\"", config, "config.toml should materialize model");
+            AssertContains("model_reasoning_effort = \"high\"", config, "config.toml should materialize model_reasoning_effort");
+            AssertContains("approval_policy = \"none\"", config, "config.toml should materialize approval_policy");
+            AssertContains("sandbox_mode = \"none\"", config, "config.toml should materialize sandbox_mode");
+            AssertContains("developer_instructions = \"CEM ACTIVE PROFILE: Test\"", config, "config.toml should materialize developer_instructions");
+            AssertContains("# CODEX_ENV_MANAGER_DESKTOP_PROFILE_END", config, "config.toml should contain desktop profile end marker");
+            AssertNotContains("profile = \"cem_", config, "config.toml must not contain legacy profile selector");
+            AssertNotContains("[profiles.", config, "config.toml must not contain legacy profiles table");
+        }
+        finally
+        {
+            try { if (Directory.Exists(accountDir)) Directory.Delete(accountDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void PersonaEngine_MaterializeProfileForDesktopLaunch_RemovesPreviousMaterializedBlock()
+    {
+        var accountId = "cem-test-" + Guid.NewGuid().ToString("N");
+        var accountDir = JunctionManager.GetAccountProfilePath(accountId);
+        Directory.CreateDirectory(accountDir);
+        var profileName = "cem_test_persona_12345678";
+        var profileConfigPath = Path.Combine(accountDir, profileName + ".config.toml");
+        var configPath = Path.Combine(accountDir, "config.toml");
+
+        File.WriteAllText(profileConfigPath,
+            "model = \"o4-mini\"\n" +
+            "approval_policy = \"none\"\n");
+
+        File.WriteAllText(configPath,
+            "cli_auth_credentials_store = \"file\"\n" +
+            "# CODEX_ENV_MANAGER_DESKTOP_PROFILE_START\n" +
+            "model = \"gpt-5\"\n" +
+            "approval_policy = \"suggest\"\n" +
+            "# CODEX_ENV_MANAGER_DESKTOP_PROFILE_END\n" +
+            "[windows]\n" +
+            "sandbox = \"elevated\"\n");
+
+        try
+        {
+            var persona = new Persona
+            {
+                Id = "12345678",
+                Name = "Test Persona",
+                ConfigOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model"] = "o4-mini",
+                    ["approval_policy"] = "none"
+                }
+            };
+
+            PersonaEngine.MaterializeProfileForDesktopLaunch(accountId, persona);
+
+            var config = File.ReadAllText(configPath);
+            AssertContains("model = \"o4-mini\"", config, "updated config should have new model value");
+            AssertContains("approval_policy = \"none\"", config, "updated config should have new approval_policy value");
+            AssertNotContains("model = \"gpt-5\"", config, "old materialized model value should be removed");
+            AssertNotContains("approval_policy = \"suggest\"", config, "old materialized approval_policy value should be removed");
+        }
+        finally
+        {
+            try { if (Directory.Exists(accountDir)) Directory.Delete(accountDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void PersonaEngine_MaterializeProfileForDesktopLaunch_PreservesWindowsAndProjectsSections()
+    {
+        var accountId = "cem-test-" + Guid.NewGuid().ToString("N");
+        var accountDir = JunctionManager.GetAccountProfilePath(accountId);
+        Directory.CreateDirectory(accountDir);
+        var profileName = "cem_test_persona_12345678";
+        var profileConfigPath = Path.Combine(accountDir, profileName + ".config.toml");
+        var configPath = Path.Combine(accountDir, "config.toml");
+
+        File.WriteAllText(profileConfigPath,
+            "model = \"o4-mini\"\n" +
+            "approval_policy = \"none\"\n");
+
+        File.WriteAllText(configPath,
+            "cli_auth_credentials_store = \"file\"\n" +
+            "[windows]\n" +
+            "sandbox = \"elevated\"\n" +
+            "[projects.\"D:\\\\Work\\\\Repo\"]\n" +
+            "trust_level = \"trusted\"\n");
+
+        try
+        {
+            var persona = new Persona
+            {
+                Id = "12345678",
+                Name = "Test Persona",
+                ConfigOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["model"] = "o4-mini",
+                    ["approval_policy"] = "none"
+                }
+            };
+
+            PersonaEngine.MaterializeProfileForDesktopLaunch(accountId, persona);
+
+            var config = File.ReadAllText(configPath);
+            AssertContains("[windows]", config, "config.toml should preserve [windows] section");
+            AssertContains("sandbox = \"elevated\"", config, "config.toml should preserve windows sandbox value");
+            AssertContains("[projects.\"D:\\\\Work\\\\Repo\"]", config, "config.toml should preserve [projects.*] section");
+            AssertContains("trust_level = \"trusted\"", config, "config.toml should preserve project trust_level");
+            AssertContains("cli_auth_credentials_store = \"file\"", config, "config.toml should preserve cli_auth_credentials_store");
+        }
+        finally
+        {
+            try { if (Directory.Exists(accountDir)) Directory.Delete(accountDir, recursive: true); } catch { }
         }
     }
 
@@ -274,8 +427,7 @@ static class Program
             var args = string.Join(" ", psi.ArgumentList.ToArray());
 
             AssertContains("app", args, "Desktop launch should use codex app");
-            AssertContains("--profile", args, "Desktop launch should pass the profile override");
-            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", args, "Desktop launch should explicitly pass the selected Codex profile");
+            AssertNotContains("--profile", args, "Desktop launch must not pass --profile because codex app does not support it");
             AssertContains(@"D:\Work\Repo", args, "Desktop launch should include the workspace path");
         }
         finally
@@ -324,11 +476,10 @@ static class Program
             var profileOverrideArgs = GetRequiredPropertyValue<string[]>(plan, "ProfileOverrideArgs");
 
             AssertContains("codex", commandPreview, "Desktop launch plan should record a command preview");
-            AssertContains("--profile", commandPreview, "Desktop launch plan command preview should include the selected profile override");
-            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", commandPreview, "Desktop launch plan command preview should include the selected profile name");
+            AssertNotContains("--profile", commandPreview, "Desktop command preview must not include --profile");
             AssertContains("codex app", profileLaunchMethod, "Desktop launch plan should record the profile-controlled launch method");
-            AssertContains("override", profileVerificationStatus.ToLowerInvariant(), "Desktop launch plan should record that the profile override was applied");
-            AssertContains("--profile", string.Join(" ", profileOverrideArgs), "Desktop launch plan should record the profile override args");
+            AssertContains("materialized", profileVerificationStatus.ToLowerInvariant(), "Desktop launch plan should record that profile was materialized into config.toml");
+            AssertEqual(0, profileOverrideArgs.Length, "Desktop launch plan should have empty profile override args because codex app does not support --profile");
         }
         finally
         {

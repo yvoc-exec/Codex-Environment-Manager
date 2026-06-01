@@ -726,6 +726,97 @@ public class PersonaEngine
         }
     }
 
+    private const string DesktopProfileStart = "# CODEX_ENV_MANAGER_DESKTOP_PROFILE_START";
+    private const string DesktopProfileEnd = "# CODEX_ENV_MANAGER_DESKTOP_PROFILE_END";
+
+    public static void MaterializeProfileForDesktopLaunch(string accountId, Persona persona)
+    {
+        var profilePath = JunctionManager.GetAccountProfilePath(accountId);
+        var configPath = Path.Combine(profilePath, "config.toml");
+        var profileName = GetProfileName(persona);
+        var profileConfigPath = Path.Combine(profilePath, profileName + ".config.toml");
+
+        if (!File.Exists(profileConfigPath))
+            throw new InvalidOperationException(
+                $"Selected Codex profile config '{profileConfigPath}' does not exist. " +
+                "Launch aborted before Codex start to prevent profile mismatch.");
+
+        var profileValues = ParseSimpleProfileConfig(File.ReadAllText(profileConfigPath));
+        if (profileValues.Count == 0)
+            throw new InvalidOperationException(
+                $"Selected Codex profile config '{profileConfigPath}' is empty or unreadable.");
+
+        var existing = File.Exists(configPath) ? File.ReadAllText(configPath) : "# Codex config" + Environment.NewLine;
+
+        // Remove previous desktop materialization block
+        var cleaned = RemoveDelimitedBlock(existing, DesktopProfileStart, DesktopProfileEnd);
+
+        // Remove root keys that will be managed by materialization to avoid duplicates
+        cleaned = RemoveRootKeys(cleaned, new HashSet<string>(profileValues.Keys, StringComparer.OrdinalIgnoreCase));
+
+        // Build materialized block
+        var sb = new StringBuilder();
+        sb.AppendLine(DesktopProfileStart);
+        sb.AppendLine("# Active Desktop profile materialized by CEM because `codex app` does not support --profile.");
+        foreach (var kv in profileValues.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"{NormalizeConfigKey(kv.Key)} = {FormatTomlValue(kv.Value)}");
+        }
+        sb.AppendLine(DesktopProfileEnd);
+
+        var materializedBlock = sb.ToString().TrimEnd();
+        var body = cleaned.Trim();
+        var updated = string.IsNullOrWhiteSpace(body)
+            ? materializedBlock + Environment.NewLine
+            : materializedBlock + Environment.NewLine + Environment.NewLine + body + Environment.NewLine;
+
+        AtomicWriteText(configPath, updated);
+    }
+
+    private static Dictionary<string, string> ParseSimpleProfileConfig(string toml)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in SplitLines(toml))
+        {
+            var line = raw.Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#", StringComparison.Ordinal)) continue;
+            var eq = line.IndexOf('=');
+            if (eq < 0) continue;
+            var key = line[..eq].Trim();
+            var value = line[(eq + 1)..].Trim();
+            // Unquote outer TOML string quotes so FormatTomlValue does not double-quote
+            if (value.Length >= 2 && value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal))
+                value = value[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\");
+            result[key] = value;
+        }
+        return result;
+    }
+
+    private static string RemoveRootKeys(string existing, HashSet<string> rootKeySet)
+    {
+        var lines = SplitLines(existing);
+        var output = new List<string>();
+        var inRoot = true;
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (inRoot && trimmed.StartsWith("[", StringComparison.Ordinal))
+                inRoot = false;
+
+            if (inRoot)
+            {
+                var match = Regex.Match(trimmed, @"^([A-Za-z0-9_.-]+)\s*=");
+                if (match.Success && rootKeySet.Contains(match.Groups[1].Value))
+                    continue;
+            }
+
+            output.Add(line);
+        }
+
+        return string.Join(Environment.NewLine, output).Trim();
+    }
+
     private static string UpsertRootKeysPreserveManaged(string existing, Dictionary<string, string> rootKeys)
     {
         var lines = SplitLines(existing);

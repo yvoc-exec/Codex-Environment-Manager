@@ -764,6 +764,7 @@ public class LauncherService
         PersonaEngine.EnsureAccountRuntimeConfig(acct.Id, ws.Path, settings.WindowsSandboxMode, settings.TrustWorkspaceOnLaunch);
         PersonaEngine.ValidateAccountProfileExists(acct.Id, profileName);
         PersonaEngine.ValidateAccountBaseConfigClean(acct.Id);
+        PersonaEngine.MaterializeProfileForDesktopLaunch(acct.Id, persona);
 
         var psi = _desktopWorkspaceLauncher.CreateBaseLaunchStartInfo(launchPlan);
         ApplyEnvironment(psi, acct, persona, accountPath, includeApiKeyFallback: acct.Type == "api_key");

@@ -197,11 +197,12 @@ public sealed class DesktopWorkspaceLauncher
             if (string.IsNullOrWhiteSpace(plan.CliFallbackPath))
                 throw new FileNotFoundException("Codex CLI fallback is not available.");
 
+            // codex app does not support --profile. Profile is materialized into config.toml before launch.
             psi = _processManager.CreateCodexAppProcessStartInfo(plan.CodexHome, plan.WorkspacePath, plan.CodexProfileName);
-            plan.ProfileLaunchMethod = "codex app --profile";
-            plan.ProfileOverrideArgs = BuildCodexAppProfileOverrideArgs(plan.WorkspacePath, plan.CodexProfileName);
-            plan.ProfileVerificationStatus = "Profile override passed";
-            plan.CommandPreview = BuildCodexAppCommandPreview(plan.CodexProfileName, plan.WorkspacePath);
+            plan.ProfileLaunchMethod = "codex app + materialized config.toml";
+            plan.ProfileOverrideArgs = Array.Empty<string>();
+            plan.ProfileVerificationStatus = "Selected CEM profile materialized into base config.toml because codex app does not support --profile.";
+            plan.CommandPreview = BuildCodexAppCommandPreview(plan.WorkspacePath);
         }
         else
         {
@@ -211,11 +212,8 @@ public sealed class DesktopWorkspaceLauncher
         return psi;
     }
 
-    private static string[] BuildCodexAppProfileOverrideArgs(string workspacePath, string codexProfileName) =>
-        new[] { "app", "--profile", codexProfileName, workspacePath };
-
-    private static string BuildCodexAppCommandPreview(string codexProfileName, string workspacePath) =>
-        $"codex app --profile {CodexProcessManager.QuoteForCmd(codexProfileName)} {CodexProcessManager.QuoteForCmd(workspacePath)}";
+    private static string BuildCodexAppCommandPreview(string workspacePath) =>
+        $"codex app {CodexProcessManager.QuoteForCmd(workspacePath)}";
 
     private static string BuildExecutableCommandPreview(string executablePath, string workspacePath) =>
         $"{CodexProcessManager.QuoteForCmd(executablePath)} {CodexProcessManager.QuoteForCmd(workspacePath)}";
