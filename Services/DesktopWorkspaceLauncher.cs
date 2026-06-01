@@ -195,6 +195,13 @@ public sealed class DesktopWorkspaceLauncher
             plan.CanLaunch = true;
             plan.ProfileLaunchMethod = "desktop_exe";
         }
+        else if (detection.HasStoreApp)
+        {
+            plan.BaseLaunchMethod = "unavailable";
+            plan.CanLaunch = false;
+            plan.ProfileLaunchMethod = "unavailable";
+            plan.FailureReason = "Microsoft Store Codex was detected, but Codex CLI was not found. Install Codex CLI or ensure codex is on PATH so CEM can launch Desktop via `codex app`.";
+        }
         else
         {
             plan.BaseLaunchMethod = "unavailable";
@@ -202,7 +209,7 @@ public sealed class DesktopWorkspaceLauncher
             plan.ProfileLaunchMethod = "unavailable";
         }
 
-        if (!plan.CanLaunch)
+        if (!plan.CanLaunch && string.IsNullOrWhiteSpace(plan.FailureReason))
         {
             plan.FailureReason = "No valid Desktop launch method was detected.";
             plan.ProfileVerificationStatus = "Profile unverified";

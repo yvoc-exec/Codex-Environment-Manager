@@ -255,16 +255,23 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
 
         if (!string.IsNullOrEmpty(OverridePath) && File.Exists(OverridePath))
         {
-            path = OverridePath;
-            _log.Info($"Using Codex Desktop override path: {OverridePath}");
-            return true;
+            if (IsWindowsAppsPath(OverridePath))
+            {
+                _log.Warn($"Desktop override path is a WindowsApps path and cannot be direct-launched: {OverridePath}");
+            }
+            else
+            {
+                path = OverridePath;
+                _log.Info($"Using Codex Desktop override path: {OverridePath}");
+                return true;
+            }
         }
 
         foreach (var c in GetDesktopExecutableCandidates())
         {
             try
             {
-                if (File.Exists(c))
+                if (File.Exists(c) && !IsWindowsAppsPath(c))
                 {
                     path = c;
                     _log.Info($"Found Codex Desktop executable: {c}");
@@ -279,7 +286,7 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
 
         foreach (var registryPath in GetRegistryAppPaths())
         {
-            if (!string.IsNullOrWhiteSpace(registryPath) && File.Exists(registryPath))
+            if (!string.IsNullOrWhiteSpace(registryPath) && File.Exists(registryPath) && !IsWindowsAppsPath(registryPath))
             {
                 path = registryPath;
                 _log.Info($"Found Codex Desktop via registry App Paths: {registryPath}");
@@ -295,7 +302,6 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-        var windowsAppsAlias = Path.Combine(local, "Microsoft", "WindowsApps");
 
         return new[]
         {
@@ -308,8 +314,7 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
             Path.Combine(programFiles, "OpenAI", "Codex", "Codex.exe"),
             Path.Combine(programFilesX86, "Codex", "Codex.exe"),
             Path.Combine(programFilesX86, "OpenAI Codex", "Codex.exe"),
-            Path.Combine(programFilesX86, "OpenAI", "Codex", "Codex.exe"),
-            Path.Combine(windowsAppsAlias, "Codex.exe")
+            Path.Combine(programFilesX86, "OpenAI", "Codex", "Codex.exe")
         }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
@@ -512,8 +517,21 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
 
     public static string EscapeBatchValue(string value) => EscapeBatchToken(value ?? string.Empty);
 
-    public static string? NormalizeDesktopOverridePath(string? path) =>
-        string.IsNullOrWhiteSpace(path) ? null : path.Trim();
+    public static string? NormalizeDesktopOverridePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var trimmed = path.Trim();
+        if (IsWindowsAppsPath(trimmed))
+            return null;
+        return trimmed;
+    }
+
+    public static bool IsWindowsAppsPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        return path.Contains(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith(@"C:\Program Files\WindowsApps\", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string EscapeBatchToken(string value) =>
         (value ?? string.Empty)

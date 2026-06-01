@@ -35,6 +35,10 @@ static class Program
         Run(nameof(BatchEscaping_EscapesSpecialCharacters), BatchEscaping_EscapesSpecialCharacters);
         Run(nameof(BatchTitleEscaping_EscapesSpecialCharacters), BatchTitleEscaping_EscapesSpecialCharacters);
         Run(nameof(NormalizeDesktopOverridePath_ReturnsNullForBlankInput), NormalizeDesktopOverridePath_ReturnsNullForBlankInput);
+        Run(nameof(CodexProcessManager_IsWindowsAppsPath_DetectsStorePaths), CodexProcessManager_IsWindowsAppsPath_DetectsStorePaths);
+        Run(nameof(CodexProcessManager_IsWindowsAppsPath_AllowsNormalPaths), CodexProcessManager_IsWindowsAppsPath_AllowsNormalPaths);
+        Run(nameof(CodexProcessManager_TryFindCodexDesktopExe_RejectsWindowsAppsOverride), CodexProcessManager_TryFindCodexDesktopExe_RejectsWindowsAppsOverride);
+        Run(nameof(DesktopLaunchPlan_StoreAppWithoutCli_ProducesClearFailure), DesktopLaunchPlan_StoreAppWithoutCli_ProducesClearFailure);
         Run(nameof(FirstRunWizard_BuildCompletedSettings_PreservesBlankDesktopPathAndMarksOnboardingComplete), FirstRunWizard_BuildCompletedSettings_PreservesBlankDesktopPathAndMarksOnboardingComplete);
         Run(nameof(ResolveManagedActiveProfileName_FallsBackToGeneratedProfileAndWarns), ResolveManagedActiveProfileName_FallsBackToGeneratedProfileAndWarns);
         Run(nameof(ShouldRemoveSessionAfterKill_OnlyWhenConfirmed), ShouldRemoveSessionAfterKill_OnlyWhenConfirmed);
@@ -423,6 +427,56 @@ static class Program
         AssertEqual<string?>(null, CodexProcessManager.NormalizeDesktopOverridePath(""), "blank desktop override should clear the in-memory override");
         AssertEqual<string?>(null, CodexProcessManager.NormalizeDesktopOverridePath("   "), "whitespace desktop override should clear the in-memory override");
         AssertEqual(@"D:\Codex\Desktop.exe", CodexProcessManager.NormalizeDesktopOverridePath(@"D:\Codex\Desktop.exe"), "non-empty desktop override should be preserved");
+    }
+
+    private static void CodexProcessManager_IsWindowsAppsPath_DetectsStorePaths()
+    {
+        AssertEqual(true, CodexProcessManager.IsWindowsAppsPath(@"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0_x64__8wekyb3d8bbwe\Codex.exe"), "typical WindowsApps path should be detected");
+        AssertEqual(true, CodexProcessManager.IsWindowsAppsPath(@"C:\Program Files\WindowsApps\Codex.exe"), "short WindowsApps path should be detected");
+        AssertEqual(true, CodexProcessManager.IsWindowsAppsPath(@"c:\program files\windowsapps\codex.exe"), "lowercase WindowsApps path should be detected");
+        AssertEqual(true, CodexProcessManager.IsWindowsAppsPath(@"D:\SomeFolder\WindowsApps\Codex.exe"), "WindowsApps segment anywhere in path should be detected");
+    }
+
+    private static void CodexProcessManager_IsWindowsAppsPath_AllowsNormalPaths()
+    {
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath(@"C:\Program Files\Codex\Codex.exe"), "normal Program Files path should not be flagged");
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath(@"D:\Codex\Codex.exe"), "custom install path should not be flagged");
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath(@"C:\Users\Alice\AppData\Local\Programs\Codex\Codex.exe"), "local app data path should not be flagged");
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath(null), "null path should not be flagged");
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath(""), "empty path should not be flagged");
+        AssertEqual(false, CodexProcessManager.IsWindowsAppsPath("   "), "whitespace path should not be flagged");
+    }
+
+    private static void CodexProcessManager_TryFindCodexDesktopExe_RejectsWindowsAppsOverride()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "cem-tests", Guid.NewGuid().ToString("N"));
+        var windowsAppsDir = Path.Combine(tempDir, "WindowsApps");
+        Directory.CreateDirectory(windowsAppsDir);
+        var fakeExe = Path.Combine(windowsAppsDir, "Codex.exe");
+        File.WriteAllText(fakeExe, string.Empty);
+
+        try
+        {
+            var log = new LogService();
+            var manager = new CodexProcessManager(log) { OverridePath = fakeExe };
+            var found = manager.TryFindCodexDesktopExe(out var path);
+
+            AssertEqual(false, found, "WindowsApps override path should be rejected");
+            AssertEqual<string?>(null, path, "rejected WindowsApps override should return null path");
+        }
+        finally
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void DesktopLaunchPlan_StoreAppWithoutCli_ProducesClearFailure()
+    {
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
+
+        AssertContains("detection.HasStoreApp", source, "Desktop launch planning should check for Store app when no CLI or exe is available");
+        AssertContains("Microsoft Store Codex was detected, but Codex CLI was not found", source, "Store-only detection should produce a specific failure reason guiding the user to install CLI");
+        AssertContains("codex app", source, "Store-only failure message should mention the codex app fallback");
     }
 
     private static void FirstRunWizard_BuildCompletedSettings_PreservesBlankDesktopPathAndMarksOnboardingComplete()

@@ -83,10 +83,18 @@ public partial class SettingsWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         var path = DesktopPathBox.Text;
-        if (!string.IsNullOrEmpty(path) && !File.Exists(path))
+        if (!string.IsNullOrEmpty(path))
         {
-            StatusText.Text = "Selected file does not exist.";
-            return;
+            if (!File.Exists(path))
+            {
+                StatusText.Text = "Selected file does not exist.";
+                return;
+            }
+            if (CodexProcessManager.IsWindowsAppsPath(path))
+            {
+                StatusText.Text = "Microsoft Store / WindowsApps Codex cannot be used as a direct Desktop executable. Leave Desktop path blank and use Codex CLI fallback (`codex app`).";
+                return;
+            }
         }
         var kimiPath = KimiPathBox.Text;
         if (!string.IsNullOrWhiteSpace(kimiPath) && File.Exists(kimiPath) == false && ContainsDirectorySeparator(kimiPath))

@@ -160,6 +160,15 @@ public partial class FirstRunWizard : Window
         };
         if (dlg.ShowDialog() == true)
         {
+            if (CodexProcessManager.IsWindowsAppsPath(dlg.FileName))
+            {
+                WpfMessageBox.Show(
+                    "Microsoft Store / WindowsApps Codex cannot be used as a direct Desktop executable. Leave Desktop path blank and use Codex CLI fallback (`codex app`).",
+                    "Invalid Desktop Path",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
             _detectedDesktopPath = dlg.FileName;
             DesktopPathText.Text = _detectedDesktopPath;
             DesktopPathText.Foreground = System.Windows.Media.Brushes.LightGreen;
