@@ -309,6 +309,19 @@ public class ConfigService
                 if (!arg.Contains('=') && i + 1 < args.Count) i++;
                 continue;
             }
+
+            if (string.Equals(key, "-c", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "--config", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = arg.Contains('=') ? arg[(arg.IndexOf('=') + 1)..] : (i + 1 < args.Count ? args[i + 1] : string.Empty);
+                if (IsProfileControlledConfigOverride(value))
+                {
+                    changed = true;
+                    if (!arg.Contains('=') && i + 1 < args.Count) i++;
+                    continue;
+                }
+            }
+
             kept.Add(arg);
         }
 
@@ -316,6 +329,19 @@ public class ConfigService
         args.Clear();
         args.AddRange(kept);
         return true;
+    }
+
+    private static bool IsProfileControlledConfigOverride(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var key = value.Split('=', 2)[0].Trim();
+        return string.Equals(key, "profile", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "model", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "model_reasoning_effort", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "sandbox_mode", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "approval_policy", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "approvals_reviewer", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "model_instructions_file", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool RenameConfigKey(Dictionary<string, string> dict, string oldKey, string newKey)

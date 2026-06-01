@@ -110,6 +110,10 @@ static class Program
         Run(nameof(KimiCliManager_AccountAwareLogin_SetsKimiCodeHome), KimiCliManager_AccountAwareLogin_SetsKimiCodeHome);
         Run(nameof(SettingsWindow_Xaml_RemovesGlobalKimiLoginButton), SettingsWindow_Xaml_RemovesGlobalKimiLoginButton);
         Run(nameof(AccountWizardWindow_Source_SupportsCodexAndKimi), AccountWizardWindow_Source_SupportsCodexAndKimi);
+        Run(nameof(LauncherService_FiltersStaleConfigProfileOverride), LauncherService_FiltersStaleConfigProfileOverride);
+        Run(nameof(LauncherService_PreservesNonProfileConfigOverride), LauncherService_PreservesNonProfileConfigOverride);
+        Run(nameof(ConfigService_StripsStalePersistedConfigProfileOverride), ConfigService_StripsStalePersistedConfigProfileOverride);
+        Run(nameof(ConfigService_PreservesSafePersistedConfigOverride), ConfigService_PreservesSafePersistedConfigOverride);
 
         if (_failures > 0)
         {
@@ -2182,6 +2186,132 @@ static class Program
         AssertContains("moonshot_api_key", source, "wizard should support Moonshot API Key");
         AssertContains("AddKimiOAuthAccount", source, "wizard should call AddKimiOAuthAccount");
         AssertContains("AddKimiApiKeyAccount", source, "wizard should call AddKimiApiKeyAccount");
+    }
+
+    private static void LauncherService_FiltersStaleConfigProfileOverride()
+    {
+        var method = typeof(LauncherService).GetMethod(
+            "FilterNonProfileCliArgs",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        if (method == null)
+            throw new Exception("FilterNonProfileCliArgs should exist as a private static method.");
+
+        var legacyArgs = new List<string>
+        {
+            "-c", "profile=\"cem_old_profile\"",
+            "--config", "profile=\"cem_old_profile\"",
+            "-c=profile=\"cem_old_profile\"",
+            "--config=profile=\"cem_old_profile\""
+        };
+
+        var result = (IEnumerable<string>)method.Invoke(null, new object[] { legacyArgs })!;
+        var filtered = result.ToList();
+
+        AssertEqual(0, filtered.Count, "legacy -c profile=... and --config profile=... overrides should be completely filtered out");
+    }
+
+    private static void LauncherService_PreservesNonProfileConfigOverride()
+    {
+        var method = typeof(LauncherService).GetMethod(
+            "FilterNonProfileCliArgs",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        if (method == null)
+            throw new Exception("FilterNonProfileCliArgs should exist as a private static method.");
+
+        var args = new List<string>
+        {
+            "--color=always",
+            "-c", "some_safe_key=value",
+            "--config", "another_safe_key=value"
+        };
+
+        var result = (IEnumerable<string>)method.Invoke(null, new object[] { args })!;
+        var filtered = result.ToList();
+
+        AssertEqual(5, filtered.Count, "non-profile-controlled config overrides should be preserved");
+        AssertContains("--color=always", filtered, "--color=always should be preserved");
+        AssertContains("-c", filtered, "-c flag for safe key should be preserved");
+        AssertContains("some_safe_key=value", filtered, "safe config override value should be preserved");
+        AssertContains("--config", filtered, "--config flag for safe key should be preserved");
+        AssertContains("another_safe_key=value", filtered, "safe config override value should be preserved");
+    }
+
+    private static void ConfigService_StripsStalePersistedConfigProfileOverride()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "cem-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+
+        try
+        {
+            var config = new ConfigService(baseDir);
+            var personas = new List<Persona>
+            {
+                new Persona
+                {
+                    Name = "Test Profile",
+                    CliArgs = new List<string>
+                    {
+                        "-c", "profile=\"cem_old\"",
+                        "--config", "profile=\"cem_old\"",
+                        "--model", "bad-model"
+                    }
+                }
+            };
+            config.SaveList("personas", personas);
+            config.EnsureDefaults();
+
+            var result = config.LoadList<Persona>("personas");
+            var testPersona = result.FirstOrDefault(p => string.Equals(p.Name, "Test Profile", StringComparison.OrdinalIgnoreCase));
+            if (testPersona == null)
+                throw new Exception("Test persona should survive EnsureDefaults");
+
+            AssertEqual(0, testPersona.CliArgs.Count, "stale -c profile=..., --config profile=..., and --model should all be stripped by migration");
+        }
+        finally
+        {
+            try { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); } catch { }
+        }
+    }
+
+    private static void ConfigService_PreservesSafePersistedConfigOverride()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "cem-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+
+        try
+        {
+            var config = new ConfigService(baseDir);
+            var personas = new List<Persona>
+            {
+                new Persona
+                {
+                    Name = "Safe Args Profile",
+                    CliArgs = new List<string>
+                    {
+                        "--color=always",
+                        "-c", "some_safe_key=value"
+                    }
+                }
+            };
+            config.SaveList("personas", personas);
+            config.EnsureDefaults();
+
+            var result = config.LoadList<Persona>("personas");
+            var testPersona = result.FirstOrDefault(p => string.Equals(p.Name, "Safe Args Profile", StringComparison.OrdinalIgnoreCase));
+            if (testPersona == null)
+                throw new Exception("Test persona should survive EnsureDefaults");
+
+            AssertEqual(3, testPersona.CliArgs.Count, "safe non-profile CLI args should be preserved by migration");
+            AssertEqual("--color=always", testPersona.CliArgs[0], "--color=always should be preserved");
+            AssertEqual("-c", testPersona.CliArgs[1], "-c flag for safe key should be preserved");
+            AssertEqual("some_safe_key=value", testPersona.CliArgs[2], "safe config override value should be preserved");
+        }
+        finally
+        {
+            try { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); } catch { }
+        }
     }
 
     private sealed class FakeBestEffortDesktopTerminator : IBestEffortDesktopTerminator

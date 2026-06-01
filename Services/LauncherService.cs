@@ -645,7 +645,8 @@ public class LauncherService
     {
         if (string.IsNullOrWhiteSpace(value)) return false;
         var key = value.Split('=', 2)[0].Trim();
-        return string.Equals(key, "model", StringComparison.OrdinalIgnoreCase) ||
+        return string.Equals(key, "profile", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(key, "model", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(key, "model_reasoning_effort", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(key, "sandbox_mode", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(key, "approval_policy", StringComparison.OrdinalIgnoreCase) ||
