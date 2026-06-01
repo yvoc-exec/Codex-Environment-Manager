@@ -187,7 +187,7 @@ public sealed class DesktopWorkspaceLauncher
         {
             plan.BaseLaunchMethod = "codex_app";
             plan.CanLaunch = true;
-            plan.ProfileLaunchMethod = "codex app -c profile";
+            plan.ProfileLaunchMethod = "codex app --profile";
         }
         else if (!string.IsNullOrWhiteSpace(detection.ExecutablePath))
         {
@@ -241,7 +241,7 @@ public sealed class DesktopWorkspaceLauncher
                 throw new FileNotFoundException("Codex CLI fallback is not available.");
 
             psi = _processManager.CreateCodexAppProcessStartInfo(plan.CodexHome, plan.WorkspacePath, plan.CodexProfileName);
-            plan.ProfileLaunchMethod = "codex app -c profile";
+            plan.ProfileLaunchMethod = "codex app --profile";
             plan.ProfileOverrideArgs = BuildCodexAppProfileOverrideArgs(plan.WorkspacePath, plan.CodexProfileName);
             plan.ProfileVerificationStatus = "Profile override passed";
             plan.CommandPreview = BuildCodexAppCommandPreview(plan.CodexProfileName, plan.WorkspacePath);
@@ -255,10 +255,10 @@ public sealed class DesktopWorkspaceLauncher
     }
 
     private static string[] BuildCodexAppProfileOverrideArgs(string workspacePath, string codexProfileName) =>
-        new[] { "app", "-c", $@"profile=""{codexProfileName}""", workspacePath };
+        new[] { "app", "--profile", codexProfileName, workspacePath };
 
     private static string BuildCodexAppCommandPreview(string codexProfileName, string workspacePath) =>
-        $"codex app -c profile=\"{codexProfileName}\" {CodexProcessManager.QuoteForCmd(workspacePath)}";
+        $"codex app --profile {CodexProcessManager.QuoteForCmd(codexProfileName)} {CodexProcessManager.QuoteForCmd(workspacePath)}";
 
     private static string BuildExecutableCommandPreview(string executablePath, string workspacePath) =>
         $"{CodexProcessManager.QuoteForCmd(executablePath)} {CodexProcessManager.QuoteForCmd(workspacePath)}";

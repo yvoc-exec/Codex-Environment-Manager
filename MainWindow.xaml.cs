@@ -596,6 +596,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var configPath = Path.Combine(accountHome, "config.toml");
             var agentsPath = Path.Combine(accountHome, "AGENTS.md");
             var instructionsPath = Path.Combine(accountHome, "cem-profiles", profileName + ".instructions.md");
+            var profileConfigPath = Path.Combine(accountHome, profileName + ".config.toml");
 
             var viewer = new GeneratedFilesViewerWindow(
                 acct.Name,
@@ -603,7 +604,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 accountHome,
                 configPath,
                 agentsPath,
-                instructionsPath)
+                instructionsPath,
+                profileConfigPath)
             {
                 Owner = this
             };

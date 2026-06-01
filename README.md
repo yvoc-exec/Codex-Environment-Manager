@@ -46,7 +46,7 @@ It supports two provider families:
 
 - Uses the selected account's `CODEX_HOME`
 - Uses managed profiles and generated `model_instructions_file` outputs
-- Desktop launch uses `codex app -c profile="<profileName>" <workspace>` where available
+- Desktop launch uses `codex app --profile <profileName> <workspace>` where available
 - Active Sessions records:
   - the requested profile name
   - the Codex profile actually requested from the launcher
@@ -154,7 +154,7 @@ be proven, CEM may retire that placeholder instead of blocking the relaunch.
 When the Codex app path is available, Desktop launch uses the profile override form:
 
 ```text
-codex app -c profile="<profileName>" <workspace>
+codex app --profile <profileName> <workspace>
 ```
 
 Desktop diagnostics include:

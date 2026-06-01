@@ -407,7 +407,7 @@ public class CodexProcessManager : IBestEffortDesktopTerminator
 
         var args = string.IsNullOrWhiteSpace(profileName)
             ? new[] { "app", workingDirectory }
-            : new[] { "app", "-c", $@"profile=""{profileName}""", workingDirectory };
+            : new[] { "app", "--profile", profileName, workingDirectory };
 
         return CreateCodexCliProcessStartInfo(codexPath, accountPath, args);
     }

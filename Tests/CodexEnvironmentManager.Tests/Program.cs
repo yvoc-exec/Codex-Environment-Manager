@@ -54,6 +54,8 @@ static class Program
         Run(nameof(LauncherService_BlocksUnmanagedDesktopLaunches), LauncherService_BlocksUnmanagedDesktopLaunches);
         Run(nameof(MainWindow_CompositionRoot_WiresProcessManagerIntoSessionManager), MainWindow_CompositionRoot_WiresProcessManagerIntoSessionManager);
         Run(nameof(MainWindow_Xaml_ReplacesMojibakeGlyphsWithSafeLabels), MainWindow_Xaml_ReplacesMojibakeGlyphsWithSafeLabels);
+        Run(nameof(TrayService_Source_UsesAppIconAssetInsteadOfSystemIcon), TrayService_Source_UsesAppIconAssetInsteadOfSystemIcon);
+        Run(nameof(Project_EmbedsAppIconAsset), Project_EmbedsAppIconAsset);
         Run(nameof(DesktopLaunchRollbackTarget_ReturnsPreviousManagedAccountWhenDifferent), DesktopLaunchRollbackTarget_ReturnsPreviousManagedAccountWhenDifferent);
         Run(nameof(DesktopLaunchRollbackTarget_ReturnsNullForMissingOrSameAccount), DesktopLaunchRollbackTarget_ReturnsNullForMissingOrSameAccount);
         Run(nameof(DesktopRecoverySession_IsReliableOnlyForRealDesktopSessions), DesktopRecoverySession_IsReliableOnlyForRealDesktopSessions);
@@ -260,8 +262,8 @@ static class Program
 
             AssertEqual(fakeCodexPath, psi.FileName, "codex app should use the discovered CLI executable");
             AssertContains("app", args, "codex app launch should include the app subcommand");
-            AssertContains("-c", args, "codex app launch should pass the profile override via config");
-            AssertContains("profile=\"cem_planner_reviewer_gpt_5_5_high_9b360c9f\"", args, "codex app launch should explicitly select the requested Codex profile");
+            AssertContains("--profile", args, "codex app launch should pass the profile override");
+            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", args, "codex app launch should explicitly select the requested Codex profile");
             AssertContains(@"D:\Work\Repo", args, "codex app launch should include the workspace path");
         }
         finally
@@ -306,8 +308,8 @@ static class Program
             var args = string.Join(" ", psi.ArgumentList.ToArray());
 
             AssertContains("app", args, "Desktop launch should use codex app");
-            AssertContains("-c", args, "Desktop launch should pass the profile override");
-            AssertContains("profile=\"cem_planner_reviewer_gpt_5_5_high_9b360c9f\"", args, "Desktop launch should explicitly pass the selected Codex profile");
+            AssertContains("--profile", args, "Desktop launch should pass the profile override");
+            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", args, "Desktop launch should explicitly pass the selected Codex profile");
             AssertContains(@"D:\Work\Repo", args, "Desktop launch should include the workspace path");
         }
         finally
@@ -356,10 +358,11 @@ static class Program
             var profileOverrideArgs = GetRequiredPropertyValue<string[]>(plan, "ProfileOverrideArgs");
 
             AssertContains("codex", commandPreview, "Desktop launch plan should record a command preview");
-            AssertContains("profile=\"cem_planner_reviewer_gpt_5_5_high_9b360c9f\"", commandPreview, "Desktop launch plan command preview should include the selected profile override");
+            AssertContains("--profile", commandPreview, "Desktop launch plan command preview should include the selected profile override");
+            AssertContains("cem_planner_reviewer_gpt_5_5_high_9b360c9f", commandPreview, "Desktop launch plan command preview should include the selected profile name");
             AssertContains("codex app", profileLaunchMethod, "Desktop launch plan should record the profile-controlled launch method");
             AssertContains("override", profileVerificationStatus.ToLowerInvariant(), "Desktop launch plan should record that the profile override was applied");
-            AssertContains("-c", string.Join(" ", profileOverrideArgs), "Desktop launch plan should record the profile override args");
+            AssertContains("--profile", string.Join(" ", profileOverrideArgs), "Desktop launch plan should record the profile override args");
         }
         finally
         {
@@ -885,6 +888,26 @@ static class Program
         AssertContains("Content=\"Launch CLI Companion\"", xaml, "CLI launch button should use plain text");
         AssertContains("Content=\"View Files\"", xaml, "view-files button should use plain text");
         AssertContains("Content=\"Resume Last\"", xaml, "resume-last button should use plain text");
+    }
+
+    private static void TrayService_Source_UsesAppIconAssetInsteadOfSystemIcon()
+    {
+        var source = ReadRepoFile("Services/TrayService.cs");
+
+        AssertContains("AppIcon.ico", source, "tray service should load the shared app icon asset");
+        AssertContains("?? SystemIcons.Application", source, "tray service should preserve the generic icon fallback");
+        AssertNotContains("Icon = SystemIcons.Application", source, "tray service should not directly assign the generic application icon");
+    }
+
+    private static void Project_EmbedsAppIconAsset()
+    {
+        var project = ReadRepoFile("CodexEnvironmentManager.csproj");
+        var iconPath = Path.Combine(FindRepoRoot(), "Assets", "AppIcon.ico");
+
+        AssertContains("<ApplicationIcon>Assets\\AppIcon.ico</ApplicationIcon>", project, "project should define the app icon for the executable");
+        AssertContains("<Resource Include=\"Assets\\AppIcon.ico\" />", project, "project should embed the app icon as a WPF resource");
+        AssertEqual(true, File.Exists(iconPath), "app icon file should exist");
+        AssertEqual(true, new FileInfo(iconPath).Length > 0, "app icon file should not be empty");
     }
 
     private static void DesktopLaunchRollbackTarget_ReturnsPreviousManagedAccountWhenDifferent()

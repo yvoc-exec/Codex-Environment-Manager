@@ -34,7 +34,8 @@ public partial class GeneratedFilesViewerWindow : Window
         string accountHome,
         string configPath,
         string agentsPath,
-        string instructionsPath)
+        string instructionsPath,
+        string profileConfigPath)
     {
         InitializeComponent();
 
@@ -45,7 +46,8 @@ public partial class GeneratedFilesViewerWindow : Window
 
         _files = new List<ViewableFile>
         {
-            new("config.toml", configPath, "Codex profile/runtime configuration."),
+            new("config.toml", configPath, "Codex base configuration. Does not contain legacy profile selectors or tables."),
+            new($"{profileName}.config.toml", profileConfigPath, "Per-profile Codex configuration with top-level keys."),
             new("AGENTS.md", agentsPath, "Compact shared CEM account guidance only; no duplicated role catalog."),
             new("profile instructions.md", instructionsPath, "Generated active profile instruction file from the selected user-editable role template.")
         };

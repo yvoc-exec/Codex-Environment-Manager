@@ -174,6 +174,7 @@ public class LauncherService
             _personaEngine.ApplyToAccount(acct, persona, instructionsFile, _config.LoadList<Persona>("personas"));
             PersonaEngine.EnsureAccountRuntimeConfig(acct.Id, ws.Path, settings.WindowsSandboxMode, settings.TrustWorkspaceOnLaunch);
             PersonaEngine.ValidateAccountProfileExists(acct.Id, profileName);
+            PersonaEngine.ValidateAccountBaseConfigClean(acct.Id);
             var launcherScript = CreateCliLauncherScript(session.Id, codexPath, accountPath, ws, acct, persona, profileName, args);
             session.StartedMarkerPath = Path.Combine(JunctionManager.SwitcherDir, "sessions", session.Id, "started.txt");
             session.ExitMarkerPath = Path.Combine(JunctionManager.SwitcherDir, "sessions", session.Id, "exit.txt");
@@ -761,6 +762,7 @@ public class LauncherService
         _personaEngine.ApplyToAccount(acct, persona, instructionsFile, _config.LoadList<Persona>("personas"));
         PersonaEngine.EnsureAccountRuntimeConfig(acct.Id, ws.Path, settings.WindowsSandboxMode, settings.TrustWorkspaceOnLaunch);
         PersonaEngine.ValidateAccountProfileExists(acct.Id, profileName);
+        PersonaEngine.ValidateAccountBaseConfigClean(acct.Id);
 
         var psi = _desktopWorkspaceLauncher.CreateBaseLaunchStartInfo(launchPlan);
         ApplyEnvironment(psi, acct, persona, accountPath, includeApiKeyFallback: acct.Type == "api_key");

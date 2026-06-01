@@ -36,6 +36,7 @@ public class PersonaEngine
         var resolvedSandbox = ResolveWindowsSandbox(existing, "elevated");
         updated = UpsertTomlTableKey(updated, "windows", "sandbox", resolvedSandbox);
 
+        updated = RemoveLegacyProfileContent(updated);
         ValidateManagedToml(updated);
         AtomicWriteText(configPath, updated);
     }
@@ -64,6 +65,7 @@ public class PersonaEngine
             updated = UpsertTomlTableKey(updated, projectHeader, "trust_level", "trusted");
         }
 
+        updated = RemoveLegacyProfileContent(updated);
         ValidateManagedToml(updated);
         AtomicWriteText(configPath, updated);
     }
@@ -97,14 +99,22 @@ public class PersonaEngine
             if (!personas.Any(p => string.Equals(p.Id, persona.Id, StringComparison.OrdinalIgnoreCase)))
                 personas.Add(persona);
 
-            var profiles = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var p in personas)
             {
                 var instructionsFile = WriteProfileInstructionsFile(profilePath, acct, p);
-                profiles[GetProfileName(p)] = BuildManagedProfileValues(p, instructionsFile);
+                var profileName = GetProfileName(p);
+                var values = BuildManagedProfileValues(p, instructionsFile);
+                WriteProfileConfigFile(profilePath, profileName, values);
             }
 
-            MergeManagedTomlProfiles(configPath, GetProfileName(persona), profiles);
+            if (File.Exists(configPath))
+            {
+                var existing = File.ReadAllText(configPath);
+                var cleaned = RemoveLegacyProfileContent(existing);
+                if (!string.Equals(existing, cleaned, StringComparison.Ordinal))
+                    AtomicWriteText(configPath, cleaned);
+            }
+
             WriteCodexRoleCatalog(profilePath, personas);
             RemoveManagedAccountOverride(profilePath);
         }
@@ -228,23 +238,19 @@ public class PersonaEngine
             .ToList();
 
         var configPath = Path.Combine(profilePath, "config.toml");
-        var storedRootProfile = ReadRootProfile(configPath);
-        var activeProfile = ResolveManagedActiveProfileName(storedRootProfile, personas, warn);
 
-        if (!string.IsNullOrWhiteSpace(activeProfile))
+        foreach (var p in personas)
         {
-            var profiles = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in personas)
-            {
-                var instructionsFile = WriteProfileInstructionsFile(profilePath, acct, p);
-                profiles[GetProfileName(p)] = BuildManagedProfileValues(p, instructionsFile);
-            }
-            MergeManagedTomlProfiles(configPath, activeProfile, profiles);
+            var instructionsFile = WriteProfileInstructionsFile(profilePath, acct, p);
+            var profileName = GetProfileName(p);
+            var values = BuildManagedProfileValues(p, instructionsFile);
+            WriteProfileConfigFile(profilePath, profileName, values);
         }
-        else if (File.Exists(configPath))
+
+        if (File.Exists(configPath))
         {
             var existing = File.ReadAllText(configPath);
-            var cleaned = RemoveRootProfileKey(existing);
+            var cleaned = RemoveLegacyProfileContent(existing);
             if (!string.Equals(existing, cleaned, StringComparison.Ordinal))
                 AtomicWriteText(configPath, cleaned);
         }
@@ -613,46 +619,34 @@ public class PersonaEngine
         return (existing[..start].TrimEnd() + Environment.NewLine + existing[end..].TrimStart()).Trim();
     }
 
-    private static string RemoveRootProfileKey(string existing)
+    private static string RemoveCemRootProfileKey(string existing)
     {
         var lines = SplitLines(existing);
-        var updated = lines.Where(line => !Regex.IsMatch(line.Trim(), "^profile\\s*=", RegexOptions.IgnoreCase)).ToList();
+        var updated = lines.Where(line => !Regex.IsMatch(line.Trim(), "^profile\\s*=\\s*\\\"cem_", RegexOptions.IgnoreCase)).ToList();
         var text = string.Join(Environment.NewLine, updated).Trim();
         return string.IsNullOrWhiteSpace(text) ? string.Empty : text + Environment.NewLine;
     }
 
-    private static void MergeManagedTomlProfiles(string configPath, string activeProfileName, Dictionary<string, Dictionary<string, string>> profiles)
+    private static void WriteProfileConfigFile(string accountProfilePath, string profileName, Dictionary<string, string> values)
     {
-        var existing = File.Exists(configPath) ? File.ReadAllText(configPath) : "# Codex config" + Environment.NewLine;
-        var cleaned = RemoveLegacyManagedTomlBlocks(existing);
-        cleaned = RemoveManagedProfileSections(cleaned);
-        cleaned = UpsertRootKeys(cleaned, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var path = Path.Combine(accountProfilePath, profileName + ".config.toml");
+        var sb = new StringBuilder();
+        sb.AppendLine($"# Profile config for {profileName}");
+        sb.AppendLine("# Generated by Codex Environment Manager. Edit personas in the app/templates, not this file.");
+        sb.AppendLine();
+        foreach (var kv in values.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
         {
-            ["cli_auth_credentials_store"] = "file",
-            ["profile"] = activeProfileName
-        });
-
-        var updated = AppendBlockAtEnd(cleaned, BuildManagedTomlProfilesBlock(profiles));
-        ValidateManagedToml(updated);
-        AtomicWriteText(configPath, updated);
+            sb.AppendLine($"{NormalizeConfigKey(kv.Key)} = {FormatTomlValue(kv.Value)}");
+        }
+        AtomicWriteText(path, sb.ToString());
     }
 
-    private static string BuildManagedTomlProfilesBlock(Dictionary<string, Dictionary<string, string>> profiles)
+    private static string RemoveLegacyProfileContent(string existing)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine(TomlManagedStart);
-        sb.AppendLine("# Managed by Codex Environment Manager. Edit personas in the app/templates, not this block.");
-        sb.AppendLine("# Root keys such as profile and cli_auth_credentials_store are upserted outside this block to avoid duplicate TOML keys.");
-        sb.AppendLine();
-        foreach (var profile in profiles.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
-        {
-            sb.AppendLine($"[profiles.{profile.Key}]");
-            foreach (var kv in profile.Value.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
-                sb.AppendLine($"{NormalizeConfigKey(kv.Key)} = {FormatTomlValue(kv.Value)}");
-            sb.AppendLine();
-        }
-        sb.AppendLine(TomlManagedEnd);
-        return sb.ToString();
+        var cleaned = RemoveLegacyManagedTomlBlocks(existing);
+        cleaned = RemoveManagedProfileSections(cleaned);
+        cleaned = RemoveCemRootProfileKey(cleaned);
+        return cleaned.Trim();
     }
 
     private static string RemoveLegacyManagedTomlBlocks(string existing)
@@ -692,25 +686,43 @@ public class PersonaEngine
 
     public static void ValidateAccountProfileExists(string accountId, string profileName)
     {
-        var configPath = Path.Combine(JunctionManager.GetAccountProfilePath(accountId), "config.toml");
-        if (!File.Exists(configPath))
-            throw new InvalidOperationException($"Selected account config.toml does not exist: {configPath}");
-
-        var toml = File.ReadAllText(configPath);
-        var pattern = @"(?m)^\[profiles\." + Regex.Escape(profileName) + @"\]\s*$";
-        if (!Regex.IsMatch(toml, pattern))
+        var accountPath = JunctionManager.GetAccountProfilePath(accountId);
+        var profileConfigPath = Path.Combine(accountPath, profileName + ".config.toml");
+        if (!File.Exists(profileConfigPath))
         {
             throw new InvalidOperationException(
-                $"Selected Codex profile '{profileName}' was not written to config.toml. " +
+                $"Selected Codex profile config '{profileConfigPath}' does not exist. " +
                 "Launch aborted before Codex start to prevent profile mismatch. " +
                 "Try Refresh all account configs, then launch again.");
         }
 
-        var profileInstructions = Path.Combine(Path.GetDirectoryName(configPath)!, "cem-profiles", profileName + ".instructions.md");
+        var profileInstructions = Path.Combine(accountPath, "cem-profiles", profileName + ".instructions.md");
         if (!File.Exists(profileInstructions))
         {
             throw new InvalidOperationException(
                 $"Selected Codex profile '{profileName}' is missing its active instruction file: {profileInstructions}");
+        }
+    }
+
+    public static void ValidateAccountBaseConfigClean(string accountId)
+    {
+        var accountPath = JunctionManager.GetAccountProfilePath(accountId);
+        var configPath = Path.Combine(accountPath, "config.toml");
+        if (!File.Exists(configPath)) return;
+
+        var toml = File.ReadAllText(configPath);
+        if (Regex.IsMatch(toml, @"^profile\s*=\s*\"cem_", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Account config.toml still contains a legacy CEM profile selector. " +
+                "Run Refresh Instructions to clean the config.");
+        }
+
+        if (Regex.IsMatch(toml, @"^\[profiles\.cem_", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Account config.toml still contains legacy CEM [profiles.*] tables. " +
+                "Run Refresh Instructions to clean the config.");
         }
     }
 
@@ -887,10 +899,7 @@ public class PersonaEngine
     {
         var lines = SplitLines(toml);
         var rootKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var managedProfileHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var managedProfileKeys = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var inRoot = true;
-        string? currentManagedProfile = null;
 
         foreach (var rawLine in lines)
         {
@@ -900,15 +909,6 @@ public class PersonaEngine
             if (line.StartsWith("[", StringComparison.Ordinal))
             {
                 inRoot = false;
-                currentManagedProfile = null;
-
-                if (line.StartsWith("[profiles.cem_", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!managedProfileHeaders.Add(line))
-                        throw new InvalidOperationException($"Generated config.toml contains duplicate managed profile section: {line}");
-                    currentManagedProfile = line;
-                    managedProfileKeys[currentManagedProfile] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                }
                 continue;
             }
 
@@ -920,11 +920,6 @@ public class PersonaEngine
             {
                 if (!rootKeys.Add(key))
                     throw new InvalidOperationException($"Generated config.toml contains duplicate root key: {key}");
-            }
-            else if (currentManagedProfile != null)
-            {
-                if (!managedProfileKeys[currentManagedProfile].Add(key))
-                    throw new InvalidOperationException($"Generated config.toml contains duplicate key '{key}' in {currentManagedProfile}");
             }
         }
     }
