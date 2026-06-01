@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Windows;
 using System.Windows.Forms;
 
@@ -12,9 +13,10 @@ public class TrayService : IDisposable
     public TrayService(MainWindow window)
     {
         _window = window;
+        var appIcon = LoadAppIcon();
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = appIcon ?? SystemIcons.Application,
             Text = "Codex Environment Manager",
             Visible = true
         };
@@ -29,6 +31,22 @@ public class TrayService : IDisposable
         });
         _icon.ContextMenuStrip = menu;
         _icon.DoubleClick += (s, e) => ShowWindow();
+    }
+
+    private static Icon? LoadAppIcon()
+    {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/Assets/AppIcon.ico", UriKind.Absolute);
+            var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
+            if (stream != null)
+                return new Icon(stream);
+        }
+        catch
+        {
+            // Fall back to generic system icon.
+        }
+        return null;
     }
 
     private void ShowWindow()

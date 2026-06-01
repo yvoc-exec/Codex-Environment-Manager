@@ -19,14 +19,11 @@ static class Program
         Run(nameof(Persona_DefaultIcon_IsEmoji), Persona_DefaultIcon_IsEmoji);
         Run(nameof(Persona_JsonMissingApprovalsReviewer_UsesUserDefault), Persona_JsonMissingApprovalsReviewer_UsesUserDefault);
         Run(nameof(BuildManagedProfileValues_IncludesApprovalsReviewer), BuildManagedProfileValues_IncludesApprovalsReviewer);
-        Run(nameof(BuildCodexDeepLinkUri_EncodesWorkspacePathAndOmitsProfile), BuildCodexDeepLinkUri_EncodesWorkspacePathAndOmitsProfile);
-        Run(nameof(BuildCodexDeepLinkVariants_IncludesThreeSafeVariantsAndRawArtifactVariant), BuildCodexDeepLinkVariants_IncludesThreeSafeVariantsAndRawArtifactVariant);
-        Run(nameof(BuildCodexDeepLinkVariants_OrdersAutomaticAttempts_BackslashThenForwardSlashThenFileUri), BuildCodexDeepLinkVariants_OrdersAutomaticAttempts_BackslashThenForwardSlashThenFileUri);
-        Run(nameof(BuildCodexDeepLinkVariants_OmitsProfileParameter), BuildCodexDeepLinkVariants_OmitsProfileParameter);
-        Run(nameof(BuildCodexDeepLinkVariants_EncodesWindowsAbsolutePath), BuildCodexDeepLinkVariants_EncodesWindowsAbsolutePath);
-        Run(nameof(BuildCodexDeepLinkVariants_EncodesForwardSlashAbsolutePath), BuildCodexDeepLinkVariants_EncodesForwardSlashAbsolutePath);
-        Run(nameof(BuildCodexDeepLinkVariants_EncodesFileUriPathValue), BuildCodexDeepLinkVariants_EncodesFileUriPathValue);
-        Run(nameof(BuildManualPowerShellStartProcessCommand_WrapsUriForCopyPaste), BuildManualPowerShellStartProcessCommand_WrapsUriForCopyPaste);
+        Run(nameof(DesktopLaunchPlan_DoesNotGenerateDeepLinkVariants), DesktopLaunchPlan_DoesNotGenerateDeepLinkVariants);
+        Run(nameof(DesktopWorkspaceLauncher_Source_DoesNotContainProtocolActivation), DesktopWorkspaceLauncher_Source_DoesNotContainProtocolActivation);
+        Run(nameof(DesktopWorkspaceLauncher_Source_DoesNotQueueAttemptWorkspaceBindingAsync), DesktopWorkspaceLauncher_Source_DoesNotQueueAttemptWorkspaceBindingAsync);
+        Run(nameof(DesktopWorkspaceLauncher_Source_UsesCodexAppArgsBindingMethod), DesktopWorkspaceLauncher_Source_UsesCodexAppArgsBindingMethod);
+        Run(nameof(DesktopWorkspaceLauncher_Source_DoesNotContainCodexThreadsNew), DesktopWorkspaceLauncher_Source_DoesNotContainCodexThreadsNew);
         Run(nameof(CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride), CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride);
         Run(nameof(DesktopWorkspaceLauncher_CreateBaseLaunchStartInfo_PassesCodexProfileName), DesktopWorkspaceLauncher_CreateBaseLaunchStartInfo_PassesCodexProfileName);
         Run(nameof(DesktopLaunchPlan_DefaultsDesktopReadbackFieldsToUnknown), DesktopLaunchPlan_DefaultsDesktopReadbackFieldsToUnknown);
@@ -161,85 +158,46 @@ static class Program
         AssertEqual("user", persona.ApprovalsReviewer, "deserializing old personas should keep the user default");
     }
 
-    private static void BuildCodexDeepLinkUri_EncodesWorkspacePathAndOmitsProfile()
+    private static void DesktopLaunchPlan_DoesNotGenerateDeepLinkVariants()
     {
-        var uri = DesktopWorkspaceLauncher.BuildCodexWorkspaceUri(@"D:\Projects\AI Work\repo");
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
 
-        AssertEqual("codex", uri.Scheme, "deep-link scheme");
-        AssertEqual("threads", uri.Host, "deep-link host");
-        AssertEqual("/new", uri.AbsolutePath, "deep-link path");
-        AssertContains("path=D%3A%5CProjects%5CAI%20Work%5Crepo", uri.Query, "encoded workspace path should be present");
-        AssertNotContains("profile=", uri.Query, "deep-link should not include undocumented profile parameter");
+        AssertNotContains("plan.DeepLinkVariants = BuildCodexWorkspaceUriVariants", source, "BuildLaunchPlan should no longer generate deep-link variants");
+        AssertNotContains("BuildCodexWorkspaceUriVariants", source, "DesktopWorkspaceLauncher should not contain BuildCodexWorkspaceUriVariants");
+        AssertNotContains("BuildCodexWorkspaceUri(", source, "DesktopWorkspaceLauncher should not contain BuildCodexWorkspaceUri");
     }
 
-    private static void BuildCodexDeepLinkVariants_IncludesThreeSafeVariantsAndRawArtifactVariant()
+    private static void DesktopWorkspaceLauncher_Source_DoesNotContainProtocolActivation()
     {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
 
-        AssertEqual(4, variants.Count, "workspace deep-link variants count");
-        AssertEqual("windows_backslash", variants[0].PathKind, "first variant should be Windows backslash");
-        AssertEqual("forward_slash", variants[1].PathKind, "second variant should be forward slash");
-        AssertEqual("file_uri", variants[2].PathKind, "third variant should be file URI");
-        AssertEqual("raw_absolute_path", variants[3].PathKind, "fourth variant should be raw absolute path");
-        AssertEqual(true, variants[0].IncludedInAutomaticAttempts, "first variant should be automatically attempted");
-        AssertEqual(true, variants[1].IncludedInAutomaticAttempts, "second variant should be automatically attempted");
-        AssertEqual(true, variants[2].IncludedInAutomaticAttempts, "third variant should be automatically attempted");
-        AssertEqual(false, variants[3].IncludedInAutomaticAttempts, "raw artifact variant should not be automatically attempted");
+        AssertNotContains("ProcessStartInfo.FileName = variant.ActivationUri", source, "protocol activation via variant.ActivationUri must be removed");
+        AssertNotContains("Attempting ActivationSucceeded handoff", source, "deep-link handoff log must be removed");
+        AssertNotContains("Protocol activation request succeeded", source, "protocol success log must be removed");
+        AssertNotContains("ActivationSucceeded recorded", source, "ActivationSucceeded log must be removed");
     }
 
-    private static void BuildCodexDeepLinkVariants_OrdersAutomaticAttempts_BackslashThenForwardSlashThenFileUri()
+    private static void DesktopWorkspaceLauncher_Source_DoesNotQueueAttemptWorkspaceBindingAsync()
     {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
-        var automatic = variants.Where(v => v.IncludedInAutomaticAttempts).Select(v => v.PathKind).ToArray();
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
 
-        AssertEqual(3, automatic.Length, "automatic attempt count");
-        AssertEqual("windows_backslash", automatic[0], "first automatic attempt");
-        AssertEqual("forward_slash", automatic[1], "second automatic attempt");
-        AssertEqual("file_uri", automatic[2], "third automatic attempt");
+        AssertNotContains("Task.Run(() => AttemptWorkspaceBindingAsync", source, "post-launch protocol binding task must be removed");
+        AssertNotContains("AttemptWorkspaceBindingAsync", source, "AttemptWorkspaceBindingAsync method must be removed");
     }
 
-    private static void BuildCodexDeepLinkVariants_OmitsProfileParameter()
+    private static void DesktopWorkspaceLauncher_Source_UsesCodexAppArgsBindingMethod()
     {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
 
-        foreach (var variant in variants)
-        {
-            AssertNotContains("profile=", variant.ActivationUri, $"variant {variant.Id} should not include undocumented profile parameter");
-        }
+        AssertContains("codex_app_args", source, "codex_app launch should record codex_app_args binding method");
+        AssertContains("workspace path is already passed as CLI argument", source, "codex_app launch should document why binding is skipped");
     }
 
-    private static void BuildCodexDeepLinkVariants_EncodesWindowsAbsolutePath()
+    private static void DesktopWorkspaceLauncher_Source_DoesNotContainCodexThreadsNew()
     {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
-        var variant = variants[0];
+        var source = ReadRepoFile("Services/DesktopWorkspaceLauncher.cs");
 
-        AssertEqual("D%3A%5CProjects%5CAI%20Work%5Crepo", variant.EncodedPathValue, "windows absolute path encoding");
-        AssertContains("path=D%3A%5CProjects%5CAI%20Work%5Crepo", variant.ActivationUri, "windows absolute path URI");
-    }
-
-    private static void BuildCodexDeepLinkVariants_EncodesForwardSlashAbsolutePath()
-    {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
-        var variant = variants[1];
-
-        AssertEqual("D%3A%2FProjects%2FAI%20Work%2Frepo", variant.EncodedPathValue, "forward slash absolute path encoding");
-        AssertContains("path=D%3A%2FProjects%2FAI%20Work%2Frepo", variant.ActivationUri, "forward slash absolute path URI");
-    }
-
-    private static void BuildCodexDeepLinkVariants_EncodesFileUriPathValue()
-    {
-        var variants = DesktopWorkspaceLauncher.BuildCodexWorkspaceUriVariants(@"D:\Projects\AI Work\repo");
-        var variant = variants[2];
-
-        AssertEqual("file%3A%2F%2F%2FD%3A%2FProjects%2FAI%2520Work%2Frepo", variant.EncodedPathValue, "file URI path encoding");
-        AssertContains("path=file%3A%2F%2F%2FD%3A%2FProjects%2FAI%2520Work%2Frepo", variant.ActivationUri, "file URI activation URI");
-    }
-
-    private static void BuildManualPowerShellStartProcessCommand_WrapsUriForCopyPaste()
-    {
-        var command = DesktopWorkspaceLauncher.BuildManualPowerShellStartProcessCommand("codex://threads/new?path=D:\\Projects\\O'Brien");
-
-        AssertEqual("Start-Process 'codex://threads/new?path=D:\\Projects\\O''Brien'", command, "manual PowerShell command should wrap and escape single quotes");
+        AssertNotContains("codex://threads/new", source, "no runtime code should construct codex://threads/new URIs");
     }
 
     private static void CodexProcessManager_CreateCodexAppProcessStartInfo_IncludesProfileOverride()
